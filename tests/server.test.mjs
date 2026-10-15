@@ -33,7 +33,9 @@ test('reporter creates a report; team reads, updates, and views HTML', async (t)
       'X-Project-Key': 'public-widget-key'},
     body: JSON.stringify({title: 'Кнопка не нажимается', description: 'Кнопка не нажимается',
       steps: 'Нажать кнопку', expected: 'Откроется форма', actual: 'Ничего',
-      diagnostics: [{type: 'error', message: 'Bearer hidden-token failed'}],
+      diagnostics: [{type: 'error', message: 'Bearer hidden-token failed',
+        eventType: 'CLIENT_REQUEST_ERROR', method: 'POST', path: '/save?token=secret',
+        statusCode: 500, requestId: 'REQ-123'}],
       pageUrl: 'http://localhost:7338/page?token=secret',
       appVersion: 'dev-123', screenshot, selection: {x: 1, y: 2, width: 30, height: 40}}),
   });
@@ -48,6 +50,9 @@ test('reporter creates a report; team reads, updates, and views HTML', async (t)
   assert.equal(detail.screenshotAvailable, true);
   assert.equal(detail.steps, 'Нажать кнопку');
   assert.equal(detail.diagnostics[0].message, 'Bearer [redacted] failed');
+  assert.equal(detail.diagnostics[0].path, '/save');
+  assert.equal(detail.diagnostics[0].statusCode, 500);
+  assert.equal(detail.diagnostics[0].requestId, 'REQ-123');
   const action = (revision, name, values = {}, headers = auth) => fetch(`${base}/api/reports/${id}`, {
     method: 'PATCH', headers: {...headers, 'Content-Type': 'application/json'},
     body: JSON.stringify({revision, action: name, ...values}),

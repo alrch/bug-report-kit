@@ -8,6 +8,7 @@ const styles = `
   .launcher{position:fixed;right:20px;bottom:20px;z-index:2147483000;border:0;border-radius:999px;padding:12px 18px;background:#2047d9;color:white;box-shadow:0 4px 18px #0004}
   .overlay{position:fixed;inset:0;z-index:2147483001;cursor:crosshair;background:#14213d30}
   .hint{position:absolute;top:18px;left:50%;transform:translateX(-50%);border-radius:8px;background:#fff;padding:10px 14px;box-shadow:0 2px 12px #0003}
+  .selection-cancel{position:absolute;top:16px;right:16px;border:0;border-radius:8px;background:#fff;padding:9px 12px;box-shadow:0 2px 12px #0003}
   .box{position:absolute;border:2px solid #2047d9;background:#2047d933;pointer-events:none}
   .backdrop{position:fixed;inset:0;z-index:2147483002;background:#0008;display:grid;place-items:center;padding:16px}
   .card{width:min(520px,100%);max-height:90vh;overflow:auto;background:#fff;border-radius:12px;padding:20px;box-shadow:0 8px 40px #0004}
@@ -61,16 +62,21 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', ap
   const base = serverUrl.replace(/\/$/, '');
   const recentDiagnostics = [];
   const addDiagnostic = (item) => {
-    recentDiagnostics.push({at: new Date().toISOString(), ...item});
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return;
+    recentDiagnostics.push({occurredAt: new Date().toISOString(), ...item});
     if (recentDiagnostics.length > 20) recentDiagnostics.shift();
   };
   const onError = (event) => {
     let source = '';
     try { const url = new URL(event.filename); source = `${url.origin}${url.pathname}`; } catch { /* no source */ }
-    addDiagnostic({type: 'error', message: String(event.message || '').slice(0, 500), source});
+    addDiagnostic({type: 'error', eventType: 'CLIENT_ERROR', level: 'ERROR',
+      message: String(event.message || '').slice(0, 500), source,
+      errorName: event.error?.name || '', stack: event.error?.stack || ''});
   };
   const onRejection = (event) => addDiagnostic({type: 'unhandledrejection',
-    message: String(event.reason?.message || event.reason || '').slice(0, 500)});
+    eventType: 'CLIENT_ERROR', level: 'ERROR',
+    message: String(event.reason?.message || event.reason || '').slice(0, 500),
+    errorName: event.reason?.name || '', stack: event.reason?.stack || ''});
   window.addEventListener('error', onError);
   window.addEventListener('unhandledrejection', onRejection);
 
@@ -237,14 +243,19 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', ap
     const hint = document.createElement('div');
     hint.className = 'hint';
     hint.textContent = 'Выделите область мышью · Esc — отмена';
+    const close = button('Отмена', 'selection-cancel');
     const box = document.createElement('div');
     box.className = 'box';
-    overlay.append(hint, box);
+    overlay.append(hint, close, box);
     root.append(overlay);
     let start = null;
-    const onKey = (event) => {
-      if (event.key === 'Escape') { overlay.remove(); launcher.hidden = false; schedulePlacement(); window.removeEventListener('keydown', onKey); }
+    const cancelSelection = () => {
+      overlay.remove(); launcher.hidden = false; schedulePlacement();
+      window.removeEventListener('keydown', onKey);
     };
+    const onKey = (event) => { if (event.key === 'Escape') cancelSelection(); };
+    close.onclick = cancelSelection;
+    close.onpointerdown = (event) => event.stopPropagation();
     window.addEventListener('keydown', onKey);
     overlay.onpointerdown = (event) => {
       if (event.button !== 0) return;
@@ -298,7 +309,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', ap
       }
     };
   };
-  return {destroy: () => {
+  return {recordDiagnostic: addDiagnostic, destroy: () => {
     cancelAnimationFrame(placementFrame);
     observer.disconnect();
     window.removeEventListener('resize', schedulePlacement);
@@ -314,7 +325,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', ap
 window.BugReportKit = {init};
 const script = document.currentScript;
 if (script?.dataset.projectKey) {
-  init({
+  window.BugReportKit.instance = init({
     serverUrl: script.dataset.serverUrl || new URL(script.src).origin,
     projectKey: script.dataset.projectKey,
     label: script.dataset.label,

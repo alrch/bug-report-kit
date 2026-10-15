@@ -115,7 +115,9 @@ async function showReport(id) {
     detail.append(img);
   }
   textBlock(detail, 'Диагностика', selected.diagnostics.map((item) =>
-    `${item.at || ''} · ${item.type || ''} · ${item.message || ''} · ${item.source || ''}`).join('\n'));
+    `${item.occurredAt || item.at || ''} · ${item.eventType || item.type || ''} · ${item.message || ''}`
+    + `${item.method ? ` · ${item.method}` : ''}${item.path ? ` ${item.path}` : ''}`
+    + `${item.statusCode ? ` · HTTP ${item.statusCode}` : ''}${item.requestId ? ` · ${item.requestId}` : ''}`).join('\n'));
   textBlock(detail, 'Причина', selected.rootCause);
   textBlock(detail, 'Исправление', selected.resolution);
   textBlock(detail, 'Код и проверки', JSON.stringify(selected.fixEvidence, null, 2));

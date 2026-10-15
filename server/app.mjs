@@ -16,11 +16,21 @@ const redactString = (value, max) => safeText(value, max)
   .replace(/Bearer\s+[^\s,;]+/gi, 'Bearer [redacted]')
   .replace(/\b(token|password|secret|api.?key|session)\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]')
   .replace(/([?&](?:token|key|secret|password|session)\s*=)[^&#\s]+/gi, '$1[redacted]');
+const DIAGNOSTIC_TEXT = {type: 80, message: 500, source: 240, at: 40,
+  occurredAt: 40, level: 20, eventType: 80, requestId: 120, errorId: 120,
+  method: 16, path: 600, errorName: 160, stack: 2000};
 const diagnosticsFrom = (value) => Array.isArray(value) ? value.slice(0, 20).map((item) => {
-  if (!item || typeof item !== 'object') return null;
-  return Object.fromEntries(Object.entries(item).filter(([key]) =>
-    ['type', 'message', 'source', 'at'].includes(key)).map(([key, entry]) =>
-    [key, SECRET_KEY.test(key) ? '[redacted]' : redactString(entry, key === 'message' ? 500 : 240)]));
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+  const result = {};
+  for (const [key, max] of Object.entries(DIAGNOSTIC_TEXT)) {
+    if (item[key] == null) continue;
+    const raw = key === 'path' ? String(item[key]).split(/[?#]/)[0] : item[key];
+    result[key] = SECRET_KEY.test(key) ? '[redacted]' : redactString(raw, max);
+  }
+  for (const key of ['statusCode', 'durationMs']) {
+    if (Number.isFinite(item[key]) && item[key] >= 0 && item[key] <= 1_000_000) result[key] = item[key];
+  }
+  return Object.keys(result).length ? result : null;
 }).filter(Boolean) : [];
 const fingerprintFor = (projectId, page, title) => createHash('sha256')
   .update(`${projectId}\n${page.pathname}\n${title.toLowerCase().replace(/\s+/g, ' ').trim()}`)
