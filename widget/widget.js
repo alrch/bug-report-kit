@@ -44,7 +44,7 @@ async function compress(canvas) {
   throw new Error('Снимок слишком большой. Выделите меньшую область.');
 }
 
-function init({serverUrl, projectKey, label = 'Сообщить о баге'} = {}) {
+function init({serverUrl, projectKey, label = 'Сообщить о баге', appVersion = ''} = {}) {
   if (!serverUrl || !projectKey) throw new Error('Нужны serverUrl и projectKey');
   const host = document.createElement('div');
   host.dataset.bugReportKit = '';
@@ -56,6 +56,58 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге'} = 
   const launcher = button(label, 'launcher');
   root.append(launcher);
   const base = serverUrl.replace(/\/$/, '');
+
+  const collisionGap = 10;
+  const targetsSelector = 'button,a[href],input:not([type="hidden"]),textarea,select,[role="button"],[role="tab"],[role="combobox"],[role="link"],[aria-modal="true"]';
+  let placementFrame = 0;
+  function placeLauncher() {
+    if (launcher.hidden) return;
+    const viewport = window.visualViewport;
+    const left = viewport?.offsetLeft || 0;
+    const top = viewport?.offsetTop || 0;
+    const right = left + (viewport?.width || innerWidth);
+    const bottom = top + (viewport?.height || innerHeight);
+    const width = launcher.offsetWidth;
+    const height = launcher.offsetHeight;
+    const targets = [...document.querySelectorAll(targetsSelector)]
+      .filter((element) => !element.closest('[data-bug-report-kit]'))
+      .map((element) => element.getBoundingClientRect())
+      .filter((rect) => rect.width && rect.height && rect.bottom > top && rect.top < bottom);
+    const overlaps = (box, rect) => box.left < rect.right + collisionGap
+      && box.right > rect.left - collisionGap
+      && box.top < rect.bottom + collisionGap
+      && box.bottom > rect.top - collisionGap;
+    const stepX = width + collisionGap;
+    const stepY = height + collisionGap;
+    let position;
+    for (let row = 0; row < 8 && !position; row += 1) {
+      for (let column = 0; column * stepX < right - left && !position; column += 1) {
+        const x = right - 20 - width - column * stepX;
+        const y = bottom - 20 - height - row * stepY;
+        const box = {left: x, right: x + width, top: y, bottom: y + height};
+        if (x >= left + collisionGap && y >= top + collisionGap
+          && targets.every((rect) => !overlaps(box, rect))) position = box;
+      }
+    }
+    // The nearest visible position still keeps the launcher usable on dense pages.
+    const x = position?.left ?? Math.max(left + collisionGap, right - width - 20);
+    const y = position?.top ?? Math.max(top + collisionGap, bottom - height - 20);
+    Object.assign(launcher.style, {left: `${x}px`, top: `${y}px`, right: 'auto', bottom: 'auto'});
+  }
+  const schedulePlacement = () => {
+    cancelAnimationFrame(placementFrame);
+    placementFrame = requestAnimationFrame(placeLauncher);
+  };
+  const observer = new MutationObserver((records) => {
+    if (records.some((record) => !(record.target instanceof Element)
+      || !record.target.closest('[data-bug-report-kit]'))) schedulePlacement();
+  });
+  observer.observe(document.body, {attributes: true, attributeFilter: ['class', 'style', 'aria-hidden'], childList: true, subtree: true});
+  window.addEventListener('resize', schedulePlacement);
+  window.addEventListener('scroll', schedulePlacement, true);
+  window.visualViewport?.addEventListener('resize', schedulePlacement);
+  window.visualViewport?.addEventListener('scroll', schedulePlacement);
+  schedulePlacement();
 
   function showForm({screenshot, selection, error = ''}) {
     launcher.hidden = true;
@@ -96,11 +148,12 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге'} = 
     const actions = document.createElement('div');
     actions.className = 'row';
     const cancel = button('Отмена');
-    cancel.onclick = () => { backdrop.remove(); launcher.hidden = false; };
+    cancel.onclick = () => { if (send.disabled) return; backdrop.remove(); launcher.hidden = false; schedulePlacement(); };
     const send = button('Отправить', 'primary');
     send.onclick = async () => {
       if (!description.value.trim()) { status.textContent = 'Опишите проблему'; return; }
       send.disabled = true;
+      cancel.disabled = true;
       status.textContent = 'Отправляем…';
       try {
         const response = await fetch(`${base}/api/reports`, {
@@ -112,6 +165,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге'} = 
             viewport: {width: innerWidth, height: innerHeight, pixelRatio: devicePixelRatio},
             selection,
             screenshot,
+            appVersion,
           }),
         });
         const result = await response.json();
@@ -120,10 +174,12 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге'} = 
         status.textContent = `Отправлено: ${result.id}`;
         send.remove();
         cancel.textContent = 'Закрыть';
+        cancel.disabled = false;
       } catch (cause) {
         status.className = 'error';
         status.textContent = cause.message || 'Не удалось отправить';
         send.disabled = false;
+        cancel.disabled = false;
       }
     };
     actions.append(cancel, send);
@@ -146,7 +202,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге'} = 
     root.append(overlay);
     let start = null;
     const onKey = (event) => {
-      if (event.key === 'Escape') { overlay.remove(); launcher.hidden = false; window.removeEventListener('keydown', onKey); }
+      if (event.key === 'Escape') { overlay.remove(); launcher.hidden = false; schedulePlacement(); window.removeEventListener('keydown', onKey); }
     };
     window.addEventListener('keydown', onKey);
     overlay.onpointerdown = (event) => {
@@ -175,19 +231,25 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге'} = 
       if (selection.width < 24 || selection.height < 24) return;
       overlay.remove();
       window.removeEventListener('keydown', onKey);
-      await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+      await new Promise((done) => setTimeout(done, 80));
       try {
         const scale = Math.min(2, Math.max(1, devicePixelRatio || 1));
-        const page = await html2canvas(document.body, {
-          x: scrollX, y: scrollY, width: innerWidth, height: innerHeight,
-          scale, useCORS: true, imageTimeout: 3000, logging: false,
-          ignoreElements: (element) => element.hasAttribute('data-bug-report-kit'),
-        });
+        const options = {
+          scale, useCORS: true, imageTimeout: 3000, logging: false, backgroundColor: null,
+          ignoreElements: (element) => element.hasAttribute('data-bug-report-kit')
+            || (element instanceof HTMLImageElement && (!element.complete || element.naturalWidth === 0)),
+        };
+        let page;
+        try { page = await html2canvas(document.body, {...options, foreignObjectRendering: true}); }
+        catch { page = await html2canvas(document.body, options); }
+        const viewport = window.visualViewport;
         const cropped = document.createElement('canvas');
         cropped.width = Math.round(selection.width * scale);
         cropped.height = Math.round(selection.height * scale);
         cropped.getContext('2d').drawImage(page,
-          selection.x * scale, selection.y * scale, cropped.width, cropped.height,
+          (scrollX + selection.x + (viewport?.offsetLeft || 0)) * scale,
+          (scrollY + selection.y + (viewport?.offsetTop || 0)) * scale,
+          cropped.width, cropped.height,
           0, 0, cropped.width, cropped.height);
         showForm({screenshot: await compress(cropped), selection});
       } catch (cause) {
@@ -195,7 +257,15 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге'} = 
       }
     };
   };
-  return {destroy: () => host.remove()};
+  return {destroy: () => {
+    cancelAnimationFrame(placementFrame);
+    observer.disconnect();
+    window.removeEventListener('resize', schedulePlacement);
+    window.removeEventListener('scroll', schedulePlacement, true);
+    window.visualViewport?.removeEventListener('resize', schedulePlacement);
+    window.visualViewport?.removeEventListener('scroll', schedulePlacement);
+    host.remove();
+  }};
 }
 
 window.BugReportKit = {init};
@@ -205,5 +275,6 @@ if (script?.dataset.projectKey) {
     serverUrl: script.dataset.serverUrl || new URL(script.src).origin,
     projectKey: script.dataset.projectKey,
     label: script.dataset.label,
+    appVersion: script.dataset.appVersion || document.querySelector('meta[name="app-version"]')?.content || '',
   });
 }

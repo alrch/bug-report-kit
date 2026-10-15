@@ -2,6 +2,7 @@ const $ = (selector) => document.querySelector(selector);
 let token = sessionStorage.getItem('bug-kit-token') || '';
 let selected = null;
 let imageUrl = '';
+let offset = 0;
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -22,10 +23,14 @@ async function loadList() {
   const query = new URLSearchParams();
   if ($('#project').value) query.set('project', $('#project').value);
   if ($('#filter').value) query.set('status', $('#filter').value);
+  query.set('offset', String(offset));
   const items = await (await api(`/api/reports?${query}`)).json();
   const list = $('#list');
   list.replaceChildren();
   if (!items.length) list.textContent = 'Пока нет багов.';
+  $('#previous').disabled = offset === 0;
+  $('#next').disabled = items.length < 100;
+  $('#page').textContent = `${offset + 1}–${offset + items.length}`;
   for (const report of items) {
     const button = document.createElement('button');
     button.className = `item ${selected?.id === report.id ? 'active' : ''}`;
@@ -57,7 +62,7 @@ async function showReport(id) {
   heading.textContent = `Баг ${selected.id.slice(0, 8)}`;
   const meta = document.createElement('p');
   meta.className = 'muted';
-  meta.textContent = `${selected.projectId} · ${selected.environment} · ${new Date(selected.createdAt).toLocaleString()}`;
+  meta.textContent = `${selected.projectId} · ${selected.environment} · версия ${selected.appVersion || 'не указана'} · ${new Date(selected.createdAt).toLocaleString()}`;
   const url = document.createElement('p');
   url.className = 'body';
   url.textContent = selected.pageUrl;
@@ -140,6 +145,8 @@ async function enter() {
 $('#token').value = token;
 $('#login-button').onclick = enter;
 $('#refresh').onclick = () => loadList().catch((error) => message(error.message, true));
-$('#project').onchange = $('#filter').onchange = $('#refresh').onclick;
+$('#project').onchange = $('#filter').onchange = () => { offset = 0; void loadList().catch((error) => message(error.message, true)); };
+$('#previous').onclick = () => { offset = Math.max(0, offset - 100); void loadList().catch((error) => message(error.message, true)); };
+$('#next').onclick = () => { offset += 100; void loadList().catch((error) => message(error.message, true)); };
 $('#logout').onclick = () => {sessionStorage.removeItem('bug-kit-token'); location.href = '/';};
 if (token) void enter();

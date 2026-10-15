@@ -8,6 +8,7 @@ let config;
 try { config = JSON.parse(readFileSync(configPath, 'utf8')); }
 catch { console.error('Создайте config.local.json по примеру config.example.json'); process.exit(1); }
 const {server} = createApp(config, {rootDir});
-server.listen(config.port || 7337, () => {
-  console.log(`Bug Report Kit: http://localhost:${config.port || 7337}`);
+const host = config.host || '127.0.0.1';
+server.listen(config.port || 7337, host, () => {
+  console.log(`Bug Report Kit: http://${host}:${config.port || 7337}`);
 });
