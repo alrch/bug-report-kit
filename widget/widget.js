@@ -79,7 +79,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', ap
       } catch (error) {
         if (shouldRecord && error?.name !== 'AbortError') addDiagnostic({
           eventType: 'CLIENT_REQUEST_ERROR', level: 'ERROR',
-          message: `${method} ${target.pathname}: ${error?.message || 'network error'}`,
+          message: `${method} ${target.pathname}: network error`,
           method, path: target.pathname, errorName: error?.name || '',
           durationMs: Math.round(performance.now() - started),
         });
