@@ -7,13 +7,23 @@
       "id": "example",
       "name": "Example project",
       "widgetKey": "replace-with-random-public-key",
-      "allowedOrigins": ["http://localhost:7338"]
+      "allowedOrigins": ["http://localhost:7338"],
+      "repositories": [
+        {"name": "example-web", "url": "https://github.com/owner/example-web"}
+      ]
     }
   ],
   "teamTokens": [
     {
       "name": "Developer",
-      "token": "replace-with-long-random-private-token",
+      "role": "developer",
+      "token": "replace-with-long-random-developer-token",
+      "projects": ["example"]
+    },
+    {
+      "name": "Reviewer",
+      "role": "reviewer",
+      "token": "replace-with-long-random-reviewer-token",
       "projects": ["example"]
     }
   ]

@@ -18,6 +18,9 @@
     .item:hover,.item.active{border-color:#2047d9}.item strong{display:block;margin-bottom:4px}
     .muted{color:#647087;font-size:13px}.report-image{max-width:100%;max-height:420px;object-fit:contain;border:1px solid #dce1e9}
     .body{white-space:pre-wrap;overflow-wrap:anywhere}.error{color:#a52222}.success{color:#146338}
+    .field{display:block;margin:12px 0}.field input,.field textarea{display:block;width:100%;margin-top:5px}
+    .actions{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}.small{font-size:12px}
+    .summary-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
     @media(max-width:720px){.grid{grid-template-columns:1fr}.list{max-height:250px}}
   </style>
 </head>
@@ -32,8 +35,15 @@
     <section id="workspace" hidden>
       <div class="panel row">
         <label>Проект <select id="project"><option value="">Все доступные</option></select></label>
-        <label>Статус <select id="filter"><option value="">Все</option><option value="new">Новые</option><option value="in_progress">В работе</option><option value="ready_for_check">На проверке</option><option value="closed">Закрытые</option></select></label>
-        <button id="refresh">Обновить</button><button id="logout">Выйти</button>
+        <label>Статус <select id="filter"><option value="">Все</option><option value="new">Новые</option><option value="triaged">Разобранные</option><option value="in_progress">В работе</option><option value="ready_for_check">На проверке</option><option value="closed">Закрытые</option><option value="cancelled">Отменённые</option></select></label>
+        <button id="refresh">Обновить</button><span id="actor" class="muted"></span><button id="logout">Выйти</button>
+      </div>
+      <div class="panel">
+        <h2>Отчёт за период</h2>
+        <div class="row"><label>С <input id="from" type="date"></label><label>По <input id="to" type="date"></label>
+          <label>Группировать <select id="group-by"><option value="environment">По контуру</option><option value="project">По проекту</option><option value="group">По похожим багам</option></select></label>
+          <button id="show-summary">Показать</button><button id="summary-html">Открыть HTML</button></div>
+        <div id="summary" class="summary-list"></div>
       </div>
       <p id="message"></p>
       <div class="grid">

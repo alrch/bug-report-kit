@@ -14,6 +14,9 @@ const styles = `
   h2{margin:0 0 12px;font-size:20px}
   .preview{display:block;max-width:100%;max-height:240px;object-fit:contain;margin:12px 0;border:1px solid #ddd}
   textarea{display:block;width:100%;min-height:110px;padding:10px;border:1px solid #aab2c1;border-radius:6px;resize:vertical}
+  .field{display:block;margin:10px 0;font-weight:600}
+  .field input,.field textarea{display:block;width:100%;margin-top:5px;padding:9px;border:1px solid #aab2c1;border-radius:6px;font-weight:400}
+  .field textarea{min-height:65px}
   .row{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
   .row button{padding:8px 14px;border-radius:6px;border:1px solid #aab2c1;background:white}
   .row .primary{border-color:#2047d9;background:#2047d9;color:white}
@@ -56,6 +59,20 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', ap
   const launcher = button(label, 'launcher');
   root.append(launcher);
   const base = serverUrl.replace(/\/$/, '');
+  const recentDiagnostics = [];
+  const addDiagnostic = (item) => {
+    recentDiagnostics.push({at: new Date().toISOString(), ...item});
+    if (recentDiagnostics.length > 20) recentDiagnostics.shift();
+  };
+  const onError = (event) => {
+    let source = '';
+    try { const url = new URL(event.filename); source = `${url.origin}${url.pathname}`; } catch { /* no source */ }
+    addDiagnostic({type: 'error', message: String(event.message || '').slice(0, 500), source});
+  };
+  const onRejection = (event) => addDiagnostic({type: 'unhandledrejection',
+    message: String(event.reason?.message || event.reason || '').slice(0, 500)});
+  window.addEventListener('error', onError);
+  window.addEventListener('unhandledrejection', onRejection);
 
   const collisionGap = 10;
   const targetsSelector = 'button,a[href],input:not([type="hidden"]),textarea,select,[role="button"],[role="tab"],[role="combobox"],[role="link"],[aria-modal="true"]';
@@ -115,8 +132,8 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', ap
     backdrop.className = 'backdrop';
     const card = document.createElement('div');
     card.className = 'card';
-    const title = document.createElement('h2');
-    title.textContent = 'Сообщить о баге';
+    const heading = document.createElement('h2');
+    heading.textContent = 'Сообщить о баге';
     const meta = document.createElement('p');
     meta.className = 'meta';
     meta.textContent = window.location.href.split('?')[0];
@@ -125,9 +142,25 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', ap
     preview.alt = 'Выделенная область';
     if (screenshot) preview.src = screenshot;
     else preview.hidden = true;
+    const field = (caption, control) => {
+      const label = document.createElement('label');
+      label.className = 'field';
+      label.textContent = caption;
+      label.append(control);
+      return label;
+    };
+    const summary = document.createElement('input');
+    summary.placeholder = 'Коротко: что сломалось';
+    summary.maxLength = 160;
     const description = document.createElement('textarea');
-    description.placeholder = 'Что произошло? Как повторить ошибку?';
+    description.placeholder = 'Что произошло';
     description.maxLength = 4000;
+    const steps = document.createElement('textarea');
+    steps.placeholder = 'Шаги, если можете повторить';
+    steps.maxLength = 2000;
+    const expected = document.createElement('textarea');
+    expected.placeholder = 'Что должно было произойти';
+    expected.maxLength = 2000;
     const uploadLabel = document.createElement('label');
     uploadLabel.textContent = 'Если снимок не получился, приложите изображение: ';
     const upload = document.createElement('input');
@@ -151,7 +184,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', ap
     cancel.onclick = () => { if (send.disabled) return; backdrop.remove(); launcher.hidden = false; schedulePlacement(); };
     const send = button('Отправить', 'primary');
     send.onclick = async () => {
-      if (!description.value.trim()) { status.textContent = 'Опишите проблему'; return; }
+      if (!summary.value.trim() || !description.value.trim()) { status.textContent = 'Укажите название и опишите проблему'; return; }
       send.disabled = true;
       cancel.disabled = true;
       status.textContent = 'Отправляем…';
@@ -160,12 +193,18 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', ap
           method: 'POST',
           headers: {'Content-Type': 'application/json', 'X-Project-Key': projectKey},
           body: JSON.stringify({
+            title: summary.value.trim(),
             description: description.value.trim(),
+            steps: steps.value.trim(),
+            expected: expected.value.trim(),
+            actual: description.value.trim(),
             pageUrl: window.location.href,
             viewport: {width: innerWidth, height: innerHeight, pixelRatio: devicePixelRatio},
             selection,
             screenshot,
             appVersion,
+            userAgent: navigator.userAgent,
+            diagnostics: recentDiagnostics,
           }),
         });
         const result = await response.json();
@@ -183,10 +222,12 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', ap
       }
     };
     actions.append(cancel, send);
-    card.append(title, meta, preview, description, uploadLabel, status, actions);
+    card.append(heading, meta, preview, field('Название *', summary),
+      field('Что произошло *', description), field('Как повторить', steps),
+      field('Что ожидалось', expected), uploadLabel, status, actions);
     backdrop.append(card);
     root.append(backdrop);
-    description.focus();
+    summary.focus();
   }
 
   launcher.onclick = () => {
@@ -264,6 +305,8 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', ap
     window.removeEventListener('scroll', schedulePlacement, true);
     window.visualViewport?.removeEventListener('resize', schedulePlacement);
     window.visualViewport?.removeEventListener('scroll', schedulePlacement);
+    window.removeEventListener('error', onError);
+    window.removeEventListener('unhandledrejection', onRejection);
     host.remove();
   }};
 }

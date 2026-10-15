@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtempSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {DatabaseSync} from 'node:sqlite';
 import {createApp} from '../server/app.mjs';
 
 test('reporter creates a report; team reads, updates, and views HTML', async (t) => {
@@ -11,7 +12,10 @@ test('reporter creates a report; team reads, updates, and views HTML', async (t)
   const config = {
     projects: [{id: 'site', name: 'Site', widgetKey: 'public-widget-key',
       allowedOrigins: ['http://localhost:7338']}],
-    teamTokens: [{name: 'Developer', token: 'private-team-token', projects: ['site']}],
+    teamTokens: [
+      {name: 'Developer', role: 'developer', token: 'private-team-token', projects: ['site']},
+      {name: 'Reviewer', role: 'reviewer', token: 'reviewer-token', projects: ['site']},
+    ],
   };
   const app = createApp(config, {rootDir: directory, database: './reports.sqlite'});
   await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
@@ -21,12 +25,15 @@ test('reporter creates a report; team reads, updates, and views HTML', async (t)
   });
   const base = `http://127.0.0.1:${app.server.address().port}`;
   const auth = {Authorization: 'Bearer private-team-token'};
-  const screenshot = 'data:image/png;base64,' + Buffer.from('tiny image').toString('base64');
+  const reviewer = {Authorization: 'Bearer reviewer-token'};
+  const screenshot = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==';
   const created = await fetch(`${base}/api/reports`, {
     method: 'POST',
     headers: {'Content-Type': 'application/json', Origin: 'http://localhost:7338',
       'X-Project-Key': 'public-widget-key'},
-    body: JSON.stringify({description: 'Кнопка не нажимается',
+    body: JSON.stringify({title: 'Кнопка не нажимается', description: 'Кнопка не нажимается',
+      steps: 'Нажать кнопку', expected: 'Откроется форма', actual: 'Ничего',
+      diagnostics: [{type: 'error', message: 'Bearer hidden-token failed'}],
       pageUrl: 'http://localhost:7338/page?token=secret',
       appVersion: 'dev-123', screenshot, selection: {x: 1, y: 2, width: 30, height: 40}}),
   });
@@ -39,16 +46,42 @@ test('reporter creates a report; team reads, updates, and views HTML', async (t)
   assert.equal(detail.appVersion, 'dev-123');
   assert.equal(detail.pageUrl, 'http://localhost:7338/page');
   assert.equal(detail.screenshotAvailable, true);
-  const updated = await fetch(`${base}/api/reports/${id}`, {
-    method: 'PATCH', headers: {...auth, 'Content-Type': 'application/json'},
-    body: JSON.stringify({revision: 0, status: 'ready_for_check',
-      rootCause: 'Обработчик не привязан', resolution: 'Привязали обработчик', note: 'Проверено'}),
+  assert.equal(detail.steps, 'Нажать кнопку');
+  assert.equal(detail.diagnostics[0].message, 'Bearer [redacted] failed');
+  const action = (revision, name, values = {}, headers = auth) => fetch(`${base}/api/reports/${id}`, {
+    method: 'PATCH', headers: {...headers, 'Content-Type': 'application/json'},
+    body: JSON.stringify({revision, action: name, ...values}),
   });
-  assert.equal(updated.status, 200);
-  assert.equal((await updated.json()).history.length, 2);
+  const directClose = await action(0, 'accept', {note: 'Проверено'}, reviewer);
+  assert.equal(directClose.status, 409);
+  const bypass = await fetch(`${base}/api/reports/${id}`, {method: 'PATCH',
+    headers: {...reviewer, 'Content-Type': 'application/json'},
+    body: JSON.stringify({revision: 0, status: 'closed'})});
+  assert.equal(bypass.status, 400);
+  assert.equal((await action(0, 'claim')).status, 200);
+  assert.equal((await action(1, 'start')).status, 200);
+  assert.equal((await action(2, 'ask', {note: 'На каком устройстве?'})).status, 200);
+  const blockedResolve = await action(3, 'resolve', {rootCause: 'Причина', resolution: 'Исправлено'});
+  assert.equal(blockedResolve.status, 409);
+  assert.equal((await action(3, 'answer', {note: 'На ноутбуке'}, reviewer)).status, 200);
+  const failedCheck = await action(4, 'resolve', {
+    rootCause: 'Обработчик не привязан', resolution: 'Привязали обработчик',
+    fixEvidence: {repositories: [{name: 'site-web', ref: 'abc123'}],
+      checks: [{name: 'smoke', result: 'failed'}]},
+  });
+  assert.equal(failedCheck.status, 400);
+  const resolved = await action(4, 'resolve', {
+    rootCause: 'Обработчик не привязан', resolution: 'Привязали обработчик',
+    fixEvidence: {repositories: [{name: 'site-web', ref: 'abc123'}],
+      checks: [{name: 'smoke', result: 'passed'}]},
+  });
+  assert.equal(resolved.status, 200);
+  assert.equal((await resolved.json()).status, 'ready_for_check');
+  assert.equal((await action(5, 'accept', {note: 'Сам проверил'})).status, 409);
+  assert.equal((await action(5, 'accept', {note: 'Проверено на dev'}, reviewer)).status, 200);
   const stale = await fetch(`${base}/api/reports/${id}`, {
     method: 'PATCH', headers: {...auth, 'Content-Type': 'application/json'},
-    body: JSON.stringify({revision: 0, status: 'closed'}),
+    body: JSON.stringify({revision: 0, action: 'claim'}),
   });
   assert.equal(stale.status, 409);
   const html = await (await fetch(`${base}/api/reports/${id}/html`, {headers: auth})).text();
@@ -56,6 +89,77 @@ test('reporter creates a report; team reads, updates, and views HTML', async (t)
   assert.match(html, /dev-123/);
   assert.match(html, /data:image\/png;base64/);
   assert.doesNotMatch(html, /token=secret/);
+  assert.doesNotMatch(html, /hidden-token/);
+  const day = new Date().toISOString().slice(0, 10);
+  const summary = await (await fetch(`${base}/api/summary?from=${day}&to=${day}&groupBy=environment`,
+    {headers: reviewer})).json();
+  assert.equal(summary.created, 1);
+  assert.equal(summary.fixed, 1);
+  assert.equal(summary.fixedGroups[0].key, 'local');
+  const periodHtml = await (await fetch(`${base}/api/summary/html?from=${day}&to=${day}`,
+    {headers: reviewer})).text();
+  assert.match(periodHtml, /Привязали обработчик/);
+  const second = await fetch(`${base}/api/reports`, {
+    method: 'POST', headers: {'Content-Type': 'application/json', Origin: 'http://localhost:7338',
+      'X-Project-Key': 'public-widget-key'},
+    body: JSON.stringify({title: 'Кнопка не нажимается', description: 'Другой случай',
+      pageUrl: 'http://localhost:7338/page'}),
+  });
+  const secondId = (await second.json()).id;
+  const related = await (await fetch(`${base}/api/reports/${secondId}/related`, {headers: reviewer})).json();
+  assert.equal(related[0].id, id);
+  const grouped = await fetch(`${base}/api/reports/${secondId}`, {method: 'PATCH',
+    headers: {...reviewer, 'Content-Type': 'application/json'},
+    body: JSON.stringify({revision: 0, action: 'group', duplicateOf: id, note: 'Один корень'}),
+  });
+  assert.equal(grouped.status, 200);
+  assert.equal((await grouped.json()).duplicateOf, id);
+  const groupedSummary = await (await fetch(`${base}/api/summary?from=${day}&to=${day}&groupBy=group`,
+    {headers: reviewer})).json();
+  assert.equal(groupedSummary.created, 2);
+  assert.equal(groupedSummary.createdGroups.length, 1);
+  assert.equal(groupedSummary.createdGroups[0].count, 2);
+});
+
+test('existing version 0.1 database is migrated without losing reports', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'bug-kit-test-'));
+  t.after(() => rmSync(directory, {recursive: true, force: true}));
+  const path = join(directory, 'reports.sqlite');
+  const old = new DatabaseSync(path);
+  old.exec(`CREATE TABLE reports (
+    id TEXT PRIMARY KEY, project_id TEXT NOT NULL, created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL, revision INTEGER NOT NULL, status TEXT NOT NULL,
+    description TEXT NOT NULL, page_url TEXT NOT NULL, origin TEXT NOT NULL,
+    environment TEXT NOT NULL, app_version TEXT NOT NULL DEFAULT '',
+    viewport TEXT NOT NULL, selection TEXT NOT NULL, screenshot BLOB,
+    screenshot_mime TEXT, root_cause TEXT NOT NULL DEFAULT '',
+    resolution TEXT NOT NULL DEFAULT '', history TEXT NOT NULL);`);
+  old.prepare(`INSERT INTO reports (id,project_id,created_at,updated_at,revision,status,
+    description,page_url,origin,environment,app_version,viewport,selection,history)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run('legacy', 'site', '2026-01-01T12:00:00.000Z',
+    '2026-01-01T12:00:00.000Z', 0, 'new', 'Старый баг', 'https://site.example/page',
+    'https://site.example', 'site.example', 'v1', '{}', '{}', '[]');
+  old.close();
+  const app = createApp({projects: [{id: 'site', widgetKey: 'key', allowedOrigins: ['https://site.example']}],
+    teamTokens: [{name: 'Reviewer', role: 'reviewer', token: 'reviewer', projects: ['site']},
+      {name: 'Developer', role: 'developer', token: 'developer', projects: ['site']}]},
+  {rootDir: directory, database: './reports.sqlite'});
+  await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => {await new Promise((resolve) => app.server.close(resolve)); app.db.close();});
+  const base = `http://127.0.0.1:${app.server.address().port}`;
+  const response = await fetch(`${base}/api/reports/legacy`, {headers: {Authorization: 'Bearer reviewer'}});
+  assert.equal(response.status, 200);
+  const report = await response.json();
+  assert.equal(report.title, 'Старый баг');
+  assert.equal(report.description, 'Старый баг');
+  assert.equal(report.priority, 'normal');
+  assert.equal(report.status, 'new');
+  app.db.prepare("UPDATE reports SET status='in_progress' WHERE id='legacy'").run();
+  const claimed = await fetch(`${base}/api/reports/legacy`, {method: 'PATCH',
+    headers: {Authorization: 'Bearer developer', 'Content-Type': 'application/json'},
+    body: JSON.stringify({revision: 0, action: 'claim'})});
+  assert.equal(claimed.status, 200);
+  assert.equal((await claimed.json()).assignee, 'Developer');
 });
 
 test('status filtering happens before pagination', async (t) => {
@@ -114,6 +218,13 @@ test('origin and project access are enforced', async (t) => {
     body: JSON.stringify({description: 'Hello', pageUrl: 'http://evil.example'}),
   });
   assert.equal(rejected.status, 403);
+  const fakeImage = await fetch(`${base}/api/reports`, {
+    method: 'POST', headers: {'Content-Type': 'application/json', Origin: 'http://localhost:7338',
+      'X-Project-Key': 'public-widget-key'},
+    body: JSON.stringify({description: 'Broken image', pageUrl: 'http://localhost:7338/page',
+      screenshot: 'data:image/png;base64,' + Buffer.from('not a png').toString('base64')}),
+  });
+  assert.equal(fakeImage.status, 400);
   const forbiddenList = await fetch(`${base}/api/reports?project=site`, {
     headers: {Authorization: 'Bearer other-token'},
   });

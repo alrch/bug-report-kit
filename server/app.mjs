@@ -1,15 +1,30 @@
 import {createServer} from 'node:http';
 import {readFileSync, existsSync, mkdirSync} from 'node:fs';
 import {dirname, resolve} from 'node:path';
-import {randomUUID, timingSafeEqual} from 'node:crypto';
+import {randomUUID, timingSafeEqual, createHash} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
+import {applyAction, STATUSES} from './workflow.mjs';
+import {getPeriodSummary, summaryHtml} from './summary.mjs';
 
-const STATUSES = new Set(['new', 'in_progress', 'ready_for_check', 'closed']);
 const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const MAX_BODY = 3 * 1024 * 1024;
 const MAX_IMAGE = 2 * 1024 * 1024;
 const limiter = new Map();
 const safeText = (value, max) => typeof value === 'string' ? value.trim().slice(0, max) : '';
+const SECRET_KEY = /authorization|cookie|token|password|secret|api.?key|session/i;
+const redactString = (value, max) => safeText(value, max)
+  .replace(/Bearer\s+[^\s,;]+/gi, 'Bearer [redacted]')
+  .replace(/\b(token|password|secret|api.?key|session)\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]')
+  .replace(/([?&](?:token|key|secret|password|session)\s*=)[^&#\s]+/gi, '$1[redacted]');
+const diagnosticsFrom = (value) => Array.isArray(value) ? value.slice(0, 20).map((item) => {
+  if (!item || typeof item !== 'object') return null;
+  return Object.fromEntries(Object.entries(item).filter(([key]) =>
+    ['type', 'message', 'source', 'at'].includes(key)).map(([key, entry]) =>
+    [key, SECRET_KEY.test(key) ? '[redacted]' : redactString(entry, key === 'message' ? 500 : 240)]));
+}).filter(Boolean) : [];
+const fingerprintFor = (projectId, page, title) => createHash('sha256')
+  .update(`${projectId}\n${page.pathname}\n${title.toLowerCase().replace(/\s+/g, ' ').trim()}`)
+  .digest('hex').slice(0, 20);
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
 })[char]);
@@ -32,6 +47,10 @@ function parseScreenshot(value) {
   if (!match || !IMAGE_MIMES.has(match[1])) throw new Error('Поддерживаются PNG, JPEG и WebP');
   const data = Buffer.from(match[2], 'base64');
   if (!data.length || data.length > MAX_IMAGE) throw new Error('Снимок должен быть не больше 2 МБ');
+  const valid = match[1] === 'image/png' ? data.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))
+    : match[1] === 'image/jpeg' ? data.subarray(0, 3).equals(Buffer.from('ffd8ff', 'hex'))
+      : data.toString('ascii', 0, 4) === 'RIFF' && data.toString('ascii', 8, 12) === 'WEBP';
+  if (!valid) throw new Error('Содержимое снимка не соответствует формату');
   return {mime: match[1], data};
 }
 
@@ -60,10 +79,17 @@ function rowToReport(row) {
   return {
     id: row.id, projectId: row.project_id, createdAt: row.created_at,
     updatedAt: row.updated_at, revision: row.revision, status: row.status,
-    description: row.description, pageUrl: row.page_url, origin: row.origin,
+    title: row.title || row.description.slice(0, 120), description: row.description,
+    steps: row.steps || '', expected: row.expected || '', actual: row.actual || '',
+    pageUrl: row.page_url, origin: row.origin, userAgent: row.user_agent || '',
     environment: row.environment, appVersion: row.app_version || '', viewport: JSON.parse(row.viewport),
     selection: JSON.parse(row.selection), screenshotAvailable: Boolean(row.screenshot_available ?? row.screenshot),
-    rootCause: row.root_cause, resolution: row.resolution, history: JSON.parse(row.history),
+    priority: row.priority || 'normal', assignee: row.assignee || '', agentState: row.agent_state || 'idle',
+    pendingQuestion: row.pending_question || '', fingerprint: row.fingerprint || '', duplicateOf: row.duplicate_of || '',
+    diagnostics: JSON.parse(row.diagnostics || '[]'), rootCause: row.root_cause,
+    resolution: row.resolution, fixEvidence: JSON.parse(row.fix_evidence || '{}'),
+    verificationNote: row.verification_note || '', acceptedAt: row.accepted_at || null,
+    history: JSON.parse(row.history),
   };
 }
 
@@ -77,23 +103,45 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
     CREATE TABLE IF NOT EXISTS reports (
       id TEXT PRIMARY KEY, project_id TEXT NOT NULL, created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL, revision INTEGER NOT NULL, status TEXT NOT NULL,
-      description TEXT NOT NULL, page_url TEXT NOT NULL, origin TEXT NOT NULL,
+      title TEXT NOT NULL DEFAULT '', description TEXT NOT NULL, steps TEXT NOT NULL DEFAULT '',
+      expected TEXT NOT NULL DEFAULT '', actual TEXT NOT NULL DEFAULT '',
+      page_url TEXT NOT NULL, origin TEXT NOT NULL, user_agent TEXT NOT NULL DEFAULT '',
       environment TEXT NOT NULL, app_version TEXT NOT NULL DEFAULT '', viewport TEXT NOT NULL, selection TEXT NOT NULL,
       screenshot BLOB, screenshot_mime TEXT, root_cause TEXT NOT NULL DEFAULT '',
-      resolution TEXT NOT NULL DEFAULT '', history TEXT NOT NULL
+      resolution TEXT NOT NULL DEFAULT '', priority TEXT NOT NULL DEFAULT 'normal',
+      assignee TEXT NOT NULL DEFAULT '', agent_state TEXT NOT NULL DEFAULT 'idle',
+      pending_question TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '',
+      duplicate_of TEXT NOT NULL DEFAULT '', diagnostics TEXT NOT NULL DEFAULT '[]',
+      fix_evidence TEXT NOT NULL DEFAULT '{}', verification_note TEXT NOT NULL DEFAULT '',
+      accepted_at TEXT, history TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS reports_project_created ON reports(project_id, created_at DESC);`);
-  if (!db.prepare('PRAGMA table_info(reports)').all().some((column) => column.name === 'app_version')) {
-    db.exec("ALTER TABLE reports ADD COLUMN app_version TEXT NOT NULL DEFAULT ''");
+  const columns = new Set(db.prepare('PRAGMA table_info(reports)').all().map((column) => column.name));
+  const additions = {
+    app_version: "TEXT NOT NULL DEFAULT ''", title: "TEXT NOT NULL DEFAULT ''",
+    steps: "TEXT NOT NULL DEFAULT ''", expected: "TEXT NOT NULL DEFAULT ''",
+    actual: "TEXT NOT NULL DEFAULT ''", user_agent: "TEXT NOT NULL DEFAULT ''",
+    priority: "TEXT NOT NULL DEFAULT 'normal'", assignee: "TEXT NOT NULL DEFAULT ''",
+    agent_state: "TEXT NOT NULL DEFAULT 'idle'", pending_question: "TEXT NOT NULL DEFAULT ''",
+    fingerprint: "TEXT NOT NULL DEFAULT ''", duplicate_of: "TEXT NOT NULL DEFAULT ''",
+    diagnostics: "TEXT NOT NULL DEFAULT '[]'", fix_evidence: "TEXT NOT NULL DEFAULT '{}'",
+    verification_note: "TEXT NOT NULL DEFAULT ''", accepted_at: 'TEXT',
+  };
+  for (const [column, definition] of Object.entries(additions)) {
+    if (!columns.has(column)) db.exec(`ALTER TABLE reports ADD COLUMN ${column} ${definition}`);
   }
+  db.exec('CREATE INDEX IF NOT EXISTS reports_accepted ON reports(project_id, accepted_at);');
+  db.exec('CREATE INDEX IF NOT EXISTS reports_fingerprint ON reports(project_id, fingerprint);');
 
   const selectOne = db.prepare('SELECT * FROM reports WHERE id = ?');
   const insert = db.prepare(`INSERT INTO reports
-    (id,project_id,created_at,updated_at,revision,status,description,page_url,origin,
-     environment,app_version,viewport,selection,screenshot,screenshot_mime,history)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-  const update = db.prepare(`UPDATE reports SET updated_at=?,revision=?,status=?,root_cause=?,
-    resolution=?,history=? WHERE id=? AND revision=?`);
+    (id,project_id,created_at,updated_at,revision,status,title,description,steps,expected,actual,
+     page_url,origin,user_agent,environment,app_version,viewport,selection,screenshot,screenshot_mime,
+     fingerprint,diagnostics,history)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  const update = db.prepare(`UPDATE reports SET updated_at=?,revision=?,status=?,priority=?,assignee=?,
+    agent_state=?,pending_question=?,root_cause=?,resolution=?,fix_evidence=?,verification_note=?,
+    accepted_at=?,duplicate_of=?,history=? WHERE id=? AND revision=?`);
 
   const allowedOrigin = (origin) => config.projects.some((project) =>
     Array.isArray(project.allowedOrigins) && project.allowedOrigins.includes(origin));
@@ -133,32 +181,55 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
         const body = await readJson(req);
         const description = safeText(body.description, 4000);
         if (!description) return json(res, 400, {error: 'Опишите проблему'});
+        const title = safeText(body.title, 160) || description.split('\n')[0].slice(0, 160);
+        const steps = safeText(body.steps, 2000);
+        const expected = safeText(body.expected, 2000);
+        const actual = safeText(body.actual, 2000);
         let page;
         try { page = new URL(body.pageUrl); }
         catch { return json(res, 400, {error: 'Некорректный адрес страницы'}); }
         if (!['http:', 'https:'].includes(page.protocol) || page.origin !== origin) return json(res, 400, {error: 'Адрес страницы не совпадает с источником'});
         page.search = '';
+        page.hash = page.hash.split('?')[0];
+        if (/^#(?:token|access_token|secret|session)[=:]/i.test(page.hash)) page.hash = '';
         page.username = '';
         page.password = '';
         const screenshot = parseScreenshot(body.screenshot);
         const appVersion = safeText(body.appVersion, 120);
+        const userAgent = safeText(body.userAgent, 300);
+        const diagnostics = diagnosticsFrom(body.diagnostics);
         const viewport = body.viewport && typeof body.viewport === 'object' ? body.viewport : {};
         const selection = body.selection && typeof body.selection === 'object' ? body.selection : {};
         const now = new Date().toISOString();
         const id = randomUUID();
-        const history = [{at: now, actor: 'reporter', status: 'new', note: 'Создано'}];
-        insert.run(id, project.id, now, now, 0, 'new', description, page.toString(),
-          origin, environmentFrom(page), appVersion, JSON.stringify(viewport), JSON.stringify(selection),
-          screenshot?.data || null, screenshot?.mime || null, JSON.stringify(history));
+        const history = [{at: now, actor: 'reporter', action: 'create', status: 'new', note: 'Создано'}];
+        insert.run(id, project.id, now, now, 0, 'new', title, description, steps, expected, actual,
+          page.toString(), origin, userAgent, environmentFrom(page), appVersion,
+          JSON.stringify(viewport), JSON.stringify(selection), screenshot?.data || null,
+          screenshot?.mime || null, fingerprintFor(project.id, page, title),
+          JSON.stringify(diagnostics), JSON.stringify(history));
         return json(res, 201, {id, status: 'new', reportUrl: `/reports/${id}`});
       }
 
       if (url.pathname.startsWith('/api/')) {
         const actor = actorFor(req);
         if (!actor) return json(res, 401, {error: 'Нужен токен команды'});
+        if (req.method === 'GET' && url.pathname === '/api/me') {
+          return json(res, 200, {name: actor.name, role: actor.role || 'admin'});
+        }
         if (req.method === 'GET' && url.pathname === '/api/projects') {
           return json(res, 200, config.projects.filter((project) => canSee(actor, project.id))
-            .map(({id, name}) => ({id, name})));
+            .map(({id, name, repositories = []}) => ({id, name, repositories})));
+        }
+        if (req.method === 'GET' && ['/api/summary', '/api/summary/html'].includes(url.pathname)) {
+          const projectId = url.searchParams.get('project') || '';
+          if (projectId && !canSee(actor, projectId)) return json(res, 403, {error: 'Нет доступа к проекту'});
+          const summary = getPeriodSummary(db, actor.projects || [], url.searchParams);
+          if (url.pathname === '/api/summary') return json(res, 200, summary);
+          res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
+            'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'"});
+          res.end(summaryHtml(summary));
+          return;
         }
         if (req.method === 'GET' && url.pathname === '/api/reports') {
           const projectId = url.searchParams.get('project') || '';
@@ -166,7 +237,7 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
           const ids = actor.projects || [];
           if (!ids.length) return json(res, 200, []);
           const status = url.searchParams.get('status') || '';
-          if (status && !STATUSES.has(status)) return json(res, 400, {error: 'Неизвестный статус'});
+          if (status && !STATUSES.includes(status)) return json(res, 400, {error: 'Неизвестный статус'});
           const offsetRaw = url.searchParams.get('offset') || '0';
           if (!/^\d{1,7}$/.test(offsetRaw)) return json(res, 400, {error: 'Некорректный номер страницы'});
           const clauses = [`project_id IN (${ids.map(() => '?').join(',')})`];
@@ -174,17 +245,26 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
           if (projectId) { clauses.push('project_id = ?'); params.push(projectId); }
           if (status) { clauses.push('status = ?'); params.push(status); }
           const rows = db.prepare(`SELECT id,project_id,created_at,updated_at,revision,status,
-            description,page_url,origin,environment,app_version,viewport,selection,root_cause,resolution,history,
+            title,description,steps,expected,actual,page_url,origin,user_agent,environment,app_version,
+            viewport,selection,priority,assignee,agent_state,pending_question,fingerprint,duplicate_of,
+            diagnostics,root_cause,resolution,fix_evidence,verification_note,accepted_at,history,
             CASE WHEN screenshot IS NULL THEN 0 ELSE 1 END AS screenshot_available
             FROM reports WHERE ${clauses.join(' AND ')}
             ORDER BY created_at DESC, rowid DESC LIMIT 100 OFFSET ?`).all(...params, Number(offsetRaw));
           return json(res, 200, rows.map(rowToReport));
         }
-        const match = /^\/api\/reports\/([^/]+)(?:\/(screenshot|html))?$/.exec(url.pathname);
+        const match = /^\/api\/reports\/([^/]+)(?:\/(screenshot|html|related))?$/.exec(url.pathname);
         if (!match) return json(res, 404, {error: 'Не найдено'});
         const row = selectOne.get(match[1]);
         if (!row) return json(res, 404, {error: 'Баг не найден'});
         if (!canSee(actor, row.project_id)) return json(res, 403, {error: 'Нет доступа к проекту'});
+        if (req.method === 'GET' && match[2] === 'related') {
+          if (!row.fingerprint) return json(res, 200, []);
+          const related = db.prepare(`SELECT id,title,status,environment,created_at AS createdAt
+            FROM reports WHERE project_id=? AND fingerprint=? AND id<>?
+            ORDER BY created_at DESC LIMIT 20`).all(row.project_id, row.fingerprint, row.id);
+          return json(res, 200, related);
+        }
         if (req.method === 'GET' && match[2] === 'screenshot') {
           if (!row.screenshot) return json(res, 404, {error: 'Снимок не найден'});
           res.writeHead(200, {'Content-Type': row.screenshot_mime, 'Cache-Control': 'no-store',
@@ -195,25 +275,31 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
         if (req.method === 'GET' && match[2] === 'html') {
           const report = rowToReport(row);
           const shot = row.screenshot ? `<img alt="Снимок" style="max-width:100%" src="data:${row.screenshot_mime};base64,${row.screenshot.toString('base64')}">` : '<p>Снимка нет</p>';
-          const html = `<!doctype html><html lang="ru"><meta charset="utf-8"><title>Баг ${escapeHtml(row.id)}</title><style>body{font:16px system-ui;max-width:900px;margin:3rem auto;padding:0 1rem;line-height:1.5}pre{white-space:pre-wrap}</style><h1>Баг ${escapeHtml(row.id)}</h1><p><b>Проект:</b> ${escapeHtml(row.project_id)} · <b>Статус:</b> ${escapeHtml(row.status)}</p><p><b>Контур:</b> ${escapeHtml(row.environment)} · <b>Версия:</b> ${escapeHtml(row.app_version || 'не указана')} · <b>Страница:</b> ${escapeHtml(row.page_url)}</p><h2>Описание</h2><pre>${escapeHtml(row.description)}</pre><h2>Снимок</h2>${shot}<h2>Причина</h2><pre>${escapeHtml(row.root_cause)}</pre><h2>Результат</h2><pre>${escapeHtml(row.resolution)}</pre><h2>История</h2><pre>${escapeHtml(JSON.stringify(report.history,null,2))}</pre></html>`;
+          const project = config.projects.find((item) => item.id === row.project_id);
+          const repositories = Array.isArray(project?.repositories) ? project.repositories : [];
+          const html = `<!doctype html><html lang="ru"><meta charset="utf-8"><title>Баг ${escapeHtml(row.id)}</title><style>body{font:16px system-ui;max-width:900px;margin:3rem auto;padding:0 1rem;line-height:1.5}pre{white-space:pre-wrap}img{max-width:100%}</style><h1>${escapeHtml(report.title)}</h1><p><b>ID:</b> ${escapeHtml(row.id)} · <b>Статус:</b> ${escapeHtml(row.status)} · <b>Приоритет:</b> ${escapeHtml(report.priority)}</p><p><b>Проект:</b> ${escapeHtml(row.project_id)} · <b>Контур:</b> ${escapeHtml(row.environment)} · <b>Версия:</b> ${escapeHtml(row.app_version || 'не указана')}</p><p><b>Страница:</b> ${escapeHtml(row.page_url)} · <b>Создан:</b> ${escapeHtml(row.created_at)}</p><p><b>Репозитории:</b> ${escapeHtml(repositories.map((item) => `${item.name}: ${item.url}`).join(', ') || 'не настроены')}</p><h2>Что произошло</h2><pre>${escapeHtml(row.description)}</pre><h2>Как повторить</h2><pre>${escapeHtml(report.steps)}</pre><h2>Ожидалось</h2><pre>${escapeHtml(report.expected)}</pre><h2>Фактически</h2><pre>${escapeHtml(report.actual)}</pre><h2>Снимок</h2>${shot}<h2>Диагностика</h2><pre>${escapeHtml(JSON.stringify(report.diagnostics,null,2))}</pre><h2>Группа</h2><pre>Отпечаток: ${escapeHtml(report.fingerprint)} · Дубликат: ${escapeHtml(report.duplicateOf)}</pre><h2>Причина</h2><pre>${escapeHtml(row.root_cause)}</pre><h2>Исправление</h2><pre>${escapeHtml(row.resolution)}</pre><h2>Код и проверки</h2><pre>${escapeHtml(JSON.stringify(report.fixEvidence,null,2))}</pre><h2>Приёмка</h2><pre>${escapeHtml(report.verificationNote)}</pre><h2>История</h2><pre>${escapeHtml(JSON.stringify(report.history,null,2))}</pre></html>`;
           res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'none'; img-src data:; style-src 'unsafe-inline'"});
           res.end(html);
           return;
         }
-        if (req.method === 'GET' && !match[2]) return json(res, 200, rowToReport(row));
+        if (req.method === 'GET' && !match[2]) return json(res, 200, {
+          ...rowToReport(row), repositories: config.projects.find((item) => item.id === row.project_id)?.repositories || [],
+        });
         if (req.method === 'PATCH' && !match[2]) {
           const body = await readJson(req);
           if (!Number.isInteger(body.revision) || body.revision !== row.revision) return json(res, 409, {error: 'Карточка уже изменилась'});
-          const status = body.status ?? row.status;
-          if (!STATUSES.has(status)) return json(res, 400, {error: 'Неизвестный статус'});
-          const rootCause = body.rootCause === undefined ? row.root_cause : safeText(body.rootCause, 4000);
-          const resolution = body.resolution === undefined ? row.resolution : safeText(body.resolution, 4000);
-          const note = safeText(body.note, 1000);
           const now = new Date().toISOString();
-          const history = JSON.parse(row.history);
-          history.push({at: now, actor: actor.name, status, note});
-          const result = update.run(now, row.revision + 1, status, rootCause, resolution,
-            JSON.stringify(history), row.id, row.revision);
+          if (body.action === 'group' && body.duplicateOf) {
+            const parent = selectOne.get(body.duplicateOf);
+            if (!parent || parent.project_id !== row.project_id || parent.id === row.id || parent.duplicate_of) {
+              return json(res, 400, {error: 'Группировать можно с основным багом того же проекта'});
+            }
+          }
+          const next = applyAction(row, body, actor, now);
+          const result = update.run(now, row.revision + 1, next.status, next.priority, next.assignee,
+            next.agentState, next.pendingQuestion, next.rootCause, next.resolution,
+            JSON.stringify(next.fixEvidence), next.verificationNote, next.acceptedAt,
+            next.duplicateOf, JSON.stringify(next.history), row.id, row.revision);
           if (!result.changes) return json(res, 409, {error: 'Карточка уже изменилась'});
           return json(res, 200, rowToReport(selectOne.get(row.id)));
         }

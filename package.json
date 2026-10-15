@@ -1,15 +1,21 @@
 {
   "name": "bug-report-kit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Self-hosted visual bug reports for web projects",
-  "engines": {"node": ">=24"},
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "build": "node scripts/build-widget.mjs",
     "start": "node server/index.mjs",
     "test": "node --test tests/*.test.mjs"
   },
-  "dependencies": {"html2canvas": "^1.4.1"},
-  "devDependencies": {"esbuild": "^0.25.0"}
+  "dependencies": {
+    "html2canvas": "^1.4.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
 }
