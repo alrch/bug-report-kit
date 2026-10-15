@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Bug Report Kit</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;font:15px system-ui,sans-serif;color:#182237;background:#f4f6fa}
+    header{display:flex;align-items:center;justify-content:space-between;background:#fff;padding:16px 24px;border-bottom:1px solid #dce1e9}
+    h1{font-size:22px;margin:0}h2{font-size:20px}main{max-width:1100px;margin:24px auto;padding:0 16px}
+    .panel{background:#fff;border:1px solid #dce1e9;border-radius:10px;padding:18px;margin-bottom:16px}
+    input,select,textarea,button{font:inherit}input,select,textarea{padding:8px;border:1px solid #a9b3c5;border-radius:6px}
+    textarea{width:100%;min-height:90px}button{padding:8px 12px;border:1px solid #a9b3c5;background:#fff;border-radius:6px;cursor:pointer}
+    button.primary{background:#2047d9;color:#fff;border-color:#2047d9}
+    .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.row>*{max-width:100%}
+    .grid{display:grid;grid-template-columns:300px minmax(0,1fr);gap:16px}
+    .list{display:grid;gap:8px;max-height:70vh;overflow:auto}.item{display:block;text-align:left;width:100%;border:1px solid #dce1e9;padding:12px;background:#fff}
+    .item:hover,.item.active{border-color:#2047d9}.item strong{display:block;margin-bottom:4px}
+    .muted{color:#647087;font-size:13px}.report-image{max-width:100%;max-height:420px;object-fit:contain;border:1px solid #dce1e9}
+    .body{white-space:pre-wrap;overflow-wrap:anywhere}.error{color:#a52222}.success{color:#146338}
+    @media(max-width:720px){.grid{grid-template-columns:1fr}.list{max-height:250px}}
+  </style>
+</head>
+<body>
+  <header><h1>Bug Report Kit</h1><span class="muted">Общие баги команды</span></header>
+  <main>
+    <section class="panel" id="login">
+      <h2>Доступ команды</h2>
+      <div class="row"><input id="token" type="password" autocomplete="off" placeholder="Токен команды" size="42"><button id="login-button" class="primary">Открыть</button></div>
+      <p class="muted">Токен хранится только в этой вкладке браузера.</p>
+    </section>
+    <section id="workspace" hidden>
+      <div class="panel row">
+        <label>Проект <select id="project"><option value="">Все доступные</option></select></label>
+        <label>Статус <select id="filter"><option value="">Все</option><option value="new">Новые</option><option value="in_progress">В работе</option><option value="ready_for_check">На проверке</option><option value="closed">Закрытые</option></select></label>
+        <button id="refresh">Обновить</button><button id="logout">Выйти</button>
+      </div>
+      <p id="message"></p>
+      <div class="grid">
+        <div class="panel"><h2>Баги</h2><div id="list" class="list"></div></div>
+        <div class="panel" id="detail"><p class="muted">Выберите баг.</p></div>
+      </div>
+    </section>
+  </main>
+  <script type="module" src="/dashboard.js"></script>
+</body>
+</html>
