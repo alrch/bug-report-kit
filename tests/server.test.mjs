@@ -3,8 +3,12 @@ import assert from 'node:assert/strict';
 import {mkdtempSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+import {fileURLToPath} from 'node:url';
 import {DatabaseSync} from 'node:sqlite';
 import {createApp} from '../server/app.mjs';
+const execFileAsync = promisify(execFile);
 
 test('reporter creates a report; team reads, updates, and views HTML', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'bug-kit-test-'));
@@ -24,6 +28,8 @@ test('reporter creates a report; team reads, updates, and views HTML', async (t)
     app.db.close();
   });
   const base = `http://127.0.0.1:${app.server.address().port}`;
+  assert.deepEqual(await (await fetch(`${base}/healthz`)).json(), {ok: true});
+  assert.match(await (await fetch(`${base}/widget.css`)).text(), /\.launcher/);
   const auth = {Authorization: 'Bearer private-team-token'};
   const reviewer = {Authorization: 'Bearer reviewer-token'};
   const screenshot = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==';
@@ -53,6 +59,11 @@ test('reporter creates a report; team reads, updates, and views HTML', async (t)
   assert.equal(detail.diagnostics[0].path, '/save');
   assert.equal(detail.diagnostics[0].statusCode, 500);
   assert.equal(detail.diagnostics[0].requestId, 'REQ-123');
+  const helper = fileURLToPath(new URL('../scripts/bug-kit-agent.mjs', import.meta.url));
+  const cli = await execFileAsync(process.execPath, [helper, 'show', id], {
+    env: {...process.env, BUG_KIT_URL: base, BUG_KIT_TOKEN: 'private-team-token'},
+  });
+  assert.equal(JSON.parse(cli.stdout).id, id);
   const action = (revision, name, values = {}, headers = auth) => fetch(`${base}/api/reports/${id}`, {
     method: 'PATCH', headers: {...headers, 'Content-Type': 'application/json'},
     body: JSON.stringify({revision, action: name, ...values}),

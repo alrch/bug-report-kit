@@ -1,31 +1,5 @@
 import html2canvas from 'html2canvas';
 
-const styles = `
-  :host{all:initial;font:14px system-ui,sans-serif;color:#172033}
-  *{box-sizing:border-box}
-  button,textarea,input{font:inherit}
-  button{cursor:pointer}
-  .launcher{position:fixed;right:20px;bottom:20px;z-index:2147483000;border:0;border-radius:999px;padding:12px 18px;background:#2047d9;color:white;box-shadow:0 4px 18px #0004}
-  .overlay{position:fixed;inset:0;z-index:2147483001;cursor:crosshair;background:#14213d30}
-  .hint{position:absolute;top:18px;left:50%;transform:translateX(-50%);border-radius:8px;background:#fff;padding:10px 14px;box-shadow:0 2px 12px #0003}
-  .selection-cancel{position:absolute;top:16px;right:16px;border:0;border-radius:8px;background:#fff;padding:9px 12px;box-shadow:0 2px 12px #0003}
-  .box{position:absolute;border:2px solid #2047d9;background:#2047d933;pointer-events:none}
-  .backdrop{position:fixed;inset:0;z-index:2147483002;background:#0008;display:grid;place-items:center;padding:16px}
-  .card{width:min(520px,100%);max-height:90vh;overflow:auto;background:#fff;border-radius:12px;padding:20px;box-shadow:0 8px 40px #0004}
-  h2{margin:0 0 12px;font-size:20px}
-  .preview{display:block;max-width:100%;max-height:240px;object-fit:contain;margin:12px 0;border:1px solid #ddd}
-  textarea{display:block;width:100%;min-height:110px;padding:10px;border:1px solid #aab2c1;border-radius:6px;resize:vertical}
-  .field{display:block;margin:10px 0;font-weight:600}
-  .field input,.field textarea{display:block;width:100%;margin-top:5px;padding:9px;border:1px solid #aab2c1;border-radius:6px;font-weight:400}
-  .field textarea{min-height:65px}
-  .row{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
-  .row button{padding:8px 14px;border-radius:6px;border:1px solid #aab2c1;background:white}
-  .row .primary{border-color:#2047d9;background:#2047d9;color:white}
-  .error{color:#a52222}
-  .success{color:#146338}
-  .meta{color:#586579;font-size:12px;overflow-wrap:anywhere}
-`;
-
 const button = (label, className = '') => {
   const node = document.createElement('button');
   node.textContent = label;
@@ -48,18 +22,19 @@ async function compress(canvas) {
   throw new Error('Снимок слишком большой. Выделите меньшую область.');
 }
 
-function init({serverUrl, projectKey, label = 'Сообщить о баге', appVersion = ''} = {}) {
+function init({serverUrl, projectKey, label = 'Сообщить о баге', appVersion = '', captureFetchErrors = false} = {}) {
   if (!serverUrl || !projectKey) throw new Error('Нужны serverUrl и projectKey');
+  const base = serverUrl.replace(/\/$/, '');
   const host = document.createElement('div');
   host.dataset.bugReportKit = '';
   document.body.append(host);
   const root = host.attachShadow({mode: 'open'});
-  const css = document.createElement('style');
-  css.textContent = styles;
+  const css = document.createElement('link');
+  css.rel = 'stylesheet';
+  css.href = `${base}/widget.css`;
   root.append(css);
   const launcher = button(label, 'launcher');
   root.append(launcher);
-  const base = serverUrl.replace(/\/$/, '');
   const recentDiagnostics = [];
   const addDiagnostic = (item) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return;
@@ -79,6 +54,40 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', ap
     errorName: event.reason?.name || '', stack: event.reason?.stack || ''});
   window.addEventListener('error', onError);
   window.addEventListener('unhandledrejection', onRejection);
+  const originalFetch = window.fetch;
+  let observedFetch;
+  if (captureFetchErrors) {
+    const serverOrigin = new URL(base).origin;
+    observedFetch = async function(input, options) {
+      const rawUrl = typeof input === 'string' ? input : input instanceof URL ? input.href : input?.url;
+      let target;
+      try { target = new URL(rawUrl, location.href); } catch { /* unknown request target */ }
+      const shouldRecord = target && !(target.origin === serverOrigin && target.pathname === '/api/reports');
+      const method = String(options?.method || input?.method || 'GET').toUpperCase();
+      const started = performance.now();
+      try {
+        const response = await originalFetch.call(window, input, options);
+        if (shouldRecord && response.status >= 400) addDiagnostic({
+          eventType: 'CLIENT_REQUEST_ERROR', level: response.status >= 500 ? 'ERROR' : 'WARN',
+          message: `${method} ${target.pathname}: HTTP ${response.status}`,
+          method, path: target.pathname, statusCode: response.status,
+          durationMs: Math.round(performance.now() - started),
+          requestId: response.headers.get('x-request-id') || '',
+          errorId: response.headers.get('x-error-id') || '',
+        });
+        return response;
+      } catch (error) {
+        if (shouldRecord && error?.name !== 'AbortError') addDiagnostic({
+          eventType: 'CLIENT_REQUEST_ERROR', level: 'ERROR',
+          message: `${method} ${target.pathname}: ${error?.message || 'network error'}`,
+          method, path: target.pathname, errorName: error?.name || '',
+          durationMs: Math.round(performance.now() - started),
+        });
+        throw error;
+      }
+    };
+    window.fetch = observedFetch;
+  }
 
   const collisionGap = 10;
   const targetsSelector = 'button,a[href],input:not([type="hidden"]),textarea,select,[role="button"],[role="tab"],[role="combobox"],[role="link"],[aria-modal="true"]';
@@ -318,6 +327,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', ap
     window.visualViewport?.removeEventListener('scroll', schedulePlacement);
     window.removeEventListener('error', onError);
     window.removeEventListener('unhandledrejection', onRejection);
+    if (observedFetch && window.fetch === observedFetch) window.fetch = originalFetch;
     host.remove();
   }};
 }
@@ -330,5 +340,6 @@ if (script?.dataset.projectKey) {
     projectKey: script.dataset.projectKey,
     label: script.dataset.label,
     appVersion: script.dataset.appVersion || document.querySelector('meta[name="app-version"]')?.content || '',
+    captureFetchErrors: script.dataset.captureFetchErrors === 'true',
   });
 }

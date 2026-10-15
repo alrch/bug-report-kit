@@ -2,6 +2,7 @@ import {createServer} from 'node:http';
 import {readFileSync, existsSync, mkdirSync} from 'node:fs';
 import {dirname, resolve} from 'node:path';
 import {randomUUID, timingSafeEqual, createHash} from 'node:crypto';
+import {isIP} from 'node:net';
 import {DatabaseSync} from 'node:sqlite';
 import {applyAction, STATUSES} from './workflow.mjs';
 import {getPeriodSummary, summaryHtml} from './summary.mjs';
@@ -173,6 +174,10 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
     const url = new URL(req.url, 'http://localhost');
     try {
+      if (req.method === 'GET' && url.pathname === '/healthz') {
+        db.prepare('SELECT 1 AS ok').get();
+        return json(res, 200, {ok: true});
+      }
       if (req.method === 'GET' && url.pathname === '/widget.js') {
         const path = resolve(rootDir, 'dist/widget.js');
         if (!existsSync(path)) return json(res, 503, {error: 'Сначала выполните npm run build'});
@@ -180,10 +185,18 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
         res.end(readFileSync(path));
         return;
       }
+      if (req.method === 'GET' && url.pathname === '/widget.css') {
+        res.writeHead(200, {'Content-Type': 'text/css; charset=utf-8', 'Cache-Control': 'no-store'});
+        res.end(readFileSync(resolve(import.meta.dirname, '../widget/widget.css')));
+        return;
+      }
       if (req.method === 'POST' && url.pathname === '/api/reports') {
         const project = projectFor(req.headers['x-project-key']);
         if (!project || !origin || !project.allowedOrigins?.includes(origin)) return json(res, 403, {error: 'Проект или адрес не разрешён'});
-        const rateKey = `${project.id}:${req.socket.remoteAddress}`;
+        const forwarded = req.headers['x-real-ip'];
+        const clientIp = config.trustProxy && typeof forwarded === 'string' && isIP(forwarded)
+          ? forwarded : req.socket.remoteAddress;
+        const rateKey = `${project.id}:${clientIp}`;
         const current = limiter.get(rateKey) || {count: 0, until: Date.now() + 60_000};
         if (Date.now() > current.until) { current.count = 0; current.until = Date.now() + 60_000; }
         if (++current.count > 20) return json(res, 429, {error: 'Слишком много сообщений'});
