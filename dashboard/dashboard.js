@@ -1,18 +1,19 @@
 const $ = (selector) => document.querySelector(selector);
-let token = sessionStorage.getItem('bug-kit-token') || '';
+let token = sessionStorage.getItem('bug-kit-panel-token') || '';
 let selected = null;
 let imageUrl = '';
 let offset = 0;
 let actor = null;
-const statusLabels = {new:'Новый',triaged:'Разобран',in_progress:'В работе',
-  ready_for_check:'На проверке',closed:'Закрыт',cancelled:'Отменён'};
+let projectNames = new Map();
+const statusLabels = {new:'Новый',triaged:'В очереди',in_progress:'Исправляется',
+  ready_for_check:'Проверить исправление',closed:'Исправлен',cancelled:'Отменён'};
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
     ...options,
     headers: {Authorization: `Bearer ${token}`, ...(options.body ? {'Content-Type': 'application/json'} : {})},
   });
-  if (response.status === 401) throw new Error('Токен не принят');
+  if (response.status === 401) throw new Error('Сессия завершилась. Войдите снова.');
   if (!response.ok) throw new Error((await response.json()).error || 'Ошибка сервера');
   return response;
 }
@@ -39,16 +40,20 @@ async function loadList() {
     button.className = `item ${selected?.id === report.id ? 'active' : ''}`;
     const title = document.createElement('strong');
     title.textContent = report.title;
+    const status = document.createElement('span');
+    status.className = `status status-${report.status}`;
+    status.textContent = statusLabels[report.status] || report.status;
     const meta = document.createElement('span');
     meta.className = 'muted';
-    meta.textContent = `${report.projectId} · ${report.environment} · ${statusLabels[report.status]} · ${new Date(report.createdAt).toLocaleString()}`;
-    button.append(title, meta);
+    meta.textContent = `${report.reporterName || 'Анонимный пользователь'} · ${new Date(report.createdAt).toLocaleString()}`;
+    button.append(title, status, meta);
     button.onclick = () => { history.replaceState(null, '', `/reports/${report.id}`); void showReport(report.id); };
     list.append(button);
   }
 }
 
 function textBlock(parent, heading, value) {
+  if (value === undefined || value === null || value === '') return;
   const h = document.createElement('h3');
   h.textContent = heading;
   const p = document.createElement('p');
@@ -58,7 +63,6 @@ function textBlock(parent, heading, value) {
 }
 
 const canReview = () => ['reviewer', 'admin'].includes(actor?.role);
-const canDevelop = () => ['developer', 'admin'].includes(actor?.role);
 
 function field(parent, label, value = '', multiline = false) {
   const wrapper = document.createElement('label');
@@ -88,22 +92,60 @@ function actionButton(parent, label, handler) {
   parent.append(button);
 }
 
+function disclosure(parent, title) {
+  const details = document.createElement('details');
+  details.className = 'technical';
+  const summary = document.createElement('summary');
+  summary.textContent = title;
+  details.append(summary);
+  parent.append(details);
+  return details;
+}
+
+function readableHistory(history = [], reporterName = '') {
+  const actions = {create: 'создал сообщение', triage: 'разобрал баг', claim: 'взял в работу',
+    start: 'начал исправление', ask: 'задал вопрос', answer: 'ответил на вопрос',
+    resolve: 'передал исправление на проверку', accept: 'принял исправление',
+    reject: 'вернул на доработку', cancel: 'отменил баг', reopen: 'открыл баг снова', group: 'связал с другим багом'};
+  const list = document.createElement('ol');
+  list.className = 'history-list';
+  for (const item of history) {
+    const row = document.createElement('li');
+    const name = item.action === 'create' ? reporterName : item.actor;
+    row.append(document.createTextNode(`${name || 'Участник'} · ${new Date(item.at).toLocaleString()} · ${actions[item.action] || 'изменил карточку'} · ${statusLabels[item.status] || item.status}`));
+    if (item.note) {
+      const note = document.createElement('p');
+      note.textContent = item.note;
+      row.append(note);
+    }
+    list.append(row);
+  }
+  return list;
+}
+
 async function showReport(id) {
   selected = await (await api(`/api/reports/${id}`)).json();
   const detail = $('#detail');
   detail.replaceChildren();
   const heading = document.createElement('h2');
   heading.textContent = selected.title;
+  const status = document.createElement('span');
+  status.className = `status status-${selected.status}`;
+  status.textContent = statusLabels[selected.status] || selected.status;
   const meta = document.createElement('p');
-  meta.className = 'muted';
-  meta.textContent = `${selected.id} · ${selected.projectId} · ${selected.environment} · ${statusLabels[selected.status]} · ${selected.priority} · версия ${selected.appVersion || 'не указана'}`;
-  detail.append(heading, meta);
-  textBlock(detail, 'Адрес страницы', selected.pageUrl);
+  meta.className = 'muted status-line';
+  meta.textContent = `${projectNames.get(selected.projectId) || 'Проект'} · ${selected.reporterName || 'Анонимный пользователь'} · ${new Date(selected.createdAt).toLocaleString()}`;
+  detail.append(heading, status, meta);
   textBlock(detail, 'Описание', selected.description);
-  textBlock(detail, 'Как повторить', selected.steps);
-  textBlock(detail, 'Ожидалось', selected.expected);
-  textBlock(detail, 'Исполнитель', selected.assignee);
-  if (selected.pendingQuestion) textBlock(detail, 'Ожидает ответа', selected.pendingQuestion);
+  if (selected.pageUrl) {
+    const pageLink = document.createElement('a');
+    pageLink.className = 'page-link';
+    pageLink.href = selected.pageUrl;
+    pageLink.target = '_blank';
+    pageLink.rel = 'noopener noreferrer';
+    pageLink.textContent = 'Открыть страницу, где найден баг';
+    detail.append(pageLink);
+  }
   if (imageUrl) URL.revokeObjectURL(imageUrl);
   imageUrl = '';
   if (selected.screenshotAvailable) {
@@ -114,132 +156,169 @@ async function showReport(id) {
     img.src = imageUrl;
     detail.append(img);
   }
-  textBlock(detail, 'Диагностика', selected.diagnostics.map((item) =>
+  if (selected.attachmentAvailable) {
+    const fileName = selected.attachmentName || 'attachment';
+    const attachment = document.createElement('div');
+    attachment.className = 'attachment-row';
+    const name = document.createElement('span');
+    name.textContent = `Вложение: ${fileName} (${Math.ceil(selected.attachmentSize / 1024)} КБ)`;
+    const download = document.createElement('button');
+    download.textContent = 'Скачать файл';
+    download.onclick = async () => {
+      try {
+        const data = await (await api(`/api/reports/${id}/attachment`)).blob();
+        const objectUrl = URL.createObjectURL(data);
+        const link = document.createElement('a');
+        link.href = objectUrl;
+        link.download = fileName;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+      } catch (error) { message(error.message, true); }
+    };
+    attachment.append(name, download);
+    detail.append(attachment);
+  }
+  textBlock(detail, 'Что исправлено', selected.resolution);
+  textBlock(detail, 'Результат проверки', selected.verificationNote);
+  const technical = disclosure(detail, 'Технические сведения');
+  textBlock(technical, 'Номер карточки', selected.id);
+  textBlock(technical, 'Проект и контур', `${selected.projectId} · ${selected.environment}`);
+  textBlock(technical, 'Версия приложения', selected.appVersion);
+  textBlock(technical, 'Приоритет', selected.priority);
+  textBlock(technical, 'Исполнитель', selected.assignee);
+  textBlock(technical, 'Контакт автора', selected.reporterContact);
+  textBlock(technical, 'ID автора', selected.reporterId);
+  textBlock(technical, 'Адрес страницы', selected.pageUrl);
+  textBlock(technical, 'Как повторить', selected.steps);
+  textBlock(technical, 'Ожидалось', selected.expected);
+  textBlock(technical, 'Диагностика', (selected.diagnostics || []).map((item) =>
     `${item.occurredAt || item.at || ''} · ${item.eventType || item.type || ''} · ${item.message || ''}`
     + `${item.method ? ` · ${item.method}` : ''}${item.path ? ` ${item.path}` : ''}`
     + `${item.statusCode ? ` · HTTP ${item.statusCode}` : ''}${item.requestId ? ` · ${item.requestId}` : ''}`).join('\n'));
-  textBlock(detail, 'Причина', selected.rootCause);
-  textBlock(detail, 'Исправление', selected.resolution);
-  textBlock(detail, 'Код и проверки', JSON.stringify(selected.fixEvidence, null, 2));
-  textBlock(detail, 'Приёмка', selected.verificationNote);
-  if (selected.duplicateOf) textBlock(detail, 'Основной баг группы', selected.duplicateOf);
+  textBlock(technical, 'Причина', selected.rootCause);
+  if (Object.keys(selected.fixEvidence || {}).length) {
+    textBlock(technical, 'Код и проверки', JSON.stringify(selected.fixEvidence, null, 2));
+  }
+  if (selected.duplicateOf) textBlock(technical, 'Связанный баг', selected.duplicateOf);
   const related = await (await api(`/api/reports/${id}/related`)).json();
-  if (related.length) textBlock(detail, 'Похожие баги', related.map((item) =>
+  if (related.length) textBlock(technical, 'Похожие баги', related.map((item) =>
     `${item.id} · ${item.title} · ${statusLabels[item.status]}`).join('\n'));
-
-  const note = field(detail, 'Комментарий, вопрос или ответ', '', true);
-  const actions = document.createElement('div');
-  actions.className = 'actions';
-  if (canReview() && selected.status === 'new') {
-    const priority = document.createElement('select');
-    for (const value of ['low', 'normal', 'high', 'critical']) priority.add(new Option(value, value));
-    priority.value = selected.priority;
-    const label = document.createElement('label');
-    label.className = 'field'; label.textContent = 'Приоритет '; label.append(priority); detail.append(label);
-    actionButton(actions, 'Разобрать', () => change(id, 'triage', {priority: priority.value, note: note.value}));
-  }
-  if (canDevelop() && ['new', 'triaged', 'in_progress'].includes(selected.status) && !selected.assignee) {
-    actionButton(actions, 'Взять в работу', () => change(id, 'claim'));
-  }
-  if (canDevelop() && selected.status === 'triaged' && selected.assignee === actor.name
-    && selected.agentState !== 'needs_decision') actionButton(actions, 'Начать исправление', () => change(id, 'start'));
-  if (canDevelop() && ['triaged', 'in_progress'].includes(selected.status)
-    && selected.assignee === actor.name && selected.agentState !== 'needs_decision') {
-    actionButton(actions, 'Задать вопрос', () => change(id, 'ask', {note: note.value}));
-  }
-  if (canReview() && selected.agentState === 'needs_decision') {
-    actionButton(actions, 'Ответить', () => change(id, 'answer', {note: note.value}));
-  }
-  if (canDevelop() && selected.status === 'in_progress' && selected.assignee === actor.name
-    && selected.agentState !== 'needs_decision') {
-    const rootCause = field(detail, 'Причина бага', selected.rootCause, true);
-    const resolution = field(detail, 'Что исправлено', selected.resolution, true);
-    const repository = field(detail, 'Репозиторий', selected.fixEvidence.repositories?.[0]?.name || '');
-    const ref = field(detail, 'Коммит или PR', selected.fixEvidence.repositories?.[0]?.ref || '');
-    const check = field(detail, 'Проверка', selected.fixEvidence.checks?.[0]?.name || '');
-    const result = field(detail, 'Результат проверки (passed)', selected.fixEvidence.checks?.[0]?.result || 'passed');
-    actionButton(actions, 'Передать на проверку', () => change(id, 'resolve', {
-      rootCause: rootCause.value, resolution: resolution.value,
-      fixEvidence: {repositories: [{name: repository.value, ref: ref.value}],
-        checks: [{name: check.value, result: result.value}]}, note: note.value,
-    }));
-  }
-  if (canReview() && selected.status === 'ready_for_check') {
-    actionButton(actions, 'Принять и закрыть', () => change(id, 'accept', {note: note.value}));
-    actionButton(actions, 'Вернуть на доработку', () => change(id, 'reject', {note: note.value}));
-  }
-  if (canReview() && ['new', 'triaged'].includes(selected.status)) {
-    actionButton(actions, 'Отменить', () => change(id, 'cancel', {note: note.value}));
-  }
-  if (canReview() && ['closed', 'cancelled'].includes(selected.status)) {
-    actionButton(actions, 'Открыть снова', () => change(id, 'reopen', {note: note.value}));
-  }
-  if (canReview()) {
-    const duplicate = field(detail, 'ID основного бага для группировки', selected.duplicateOf);
-    actionButton(actions, 'Сохранить группу', () => change(id, 'group', {duplicateOf: duplicate.value, note: note.value}));
-  }
-  actionButton(actions, 'Открыть HTML-тикет', async () => {
+  actionButton(technical, 'Открыть HTML-отчёт', async () => {
     try {
       const blob = await (await api(`/api/reports/${id}/html`)).blob();
       const url = URL.createObjectURL(blob);
       window.open(url, '_blank', 'noopener');
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch (error) { message(error.message, true); }
   });
-  detail.append(actions);
-  textBlock(detail, 'История', selected.history.map((item) =>
-    `${item.at} · ${item.actor} · ${item.action || 'change'} · ${statusLabels[item.status] || item.status}${item.note ? ` · ${item.note}` : ''}`).join('\n'));
+  if (selected.pendingQuestion) textBlock(detail, 'Вопрос команды', selected.pendingQuestion);
+  const actions = document.createElement('div');
+  actions.className = 'actions review-actions';
+  if (canReview() && selected.agentState === 'needs_decision') {
+    const answer = field(actions, 'Ответ на вопрос', '', true);
+    actionButton(actions, 'Отправить ответ', () => {
+      if (!answer.value.trim()) return message('Введите ответ на вопрос.', true);
+      void change(id, 'answer', {note: answer.value});
+    });
+  }
+  if (canReview() && selected.status === 'ready_for_check') {
+    const note = field(actions, 'Результат проверки или замечание', '', true);
+    const submit = (action) => {
+      if (!note.value.trim()) return message('Укажите результат проверки или замечание.', true);
+      void change(id, action, {note: note.value});
+    };
+    actionButton(actions, 'Принять исправление', () => submit('accept'));
+    actionButton(actions, 'Вернуть на доработку', () => submit('reject'));
+  }
+  if (actions.childElementCount) detail.append(actions);
+  if (selected.history?.length) {
+    const history = document.createElement('section');
+    history.className = 'history';
+    const title = document.createElement('h3');
+    title.textContent = 'История изменений';
+    history.append(title, readableHistory(selected.history, selected.reporterName));
+    detail.append(history);
+  }
 }
 
 async function enter() {
-  token = $('#token').value.trim() || token;
   if (!token) return;
   try {
     actor = await (await api('/api/me')).json();
     const projects = await (await api('/api/projects')).json();
-    sessionStorage.setItem('bug-kit-token', token);
-    $('#actor').textContent = `${actor.name} · ${actor.role}`;
+    projectNames = new Map(projects.map((project) => [project.id, project.name]));
+    sessionStorage.setItem('bug-kit-panel-token', token);
+    $('#actor').textContent = actor.name;
+    $('#header-session').hidden = false;
     $('#project').replaceChildren(new Option('Все доступные', ''));
     for (const project of projects) $('#project').add(new Option(project.name, project.id));
+    $('#project-filter').hidden = projects.length <= 1;
     $('#login').hidden = true;
     $('#workspace').hidden = false;
-    const today = new Date().toISOString().slice(0, 10);
-    $('#to').value = today;
-    $('#from').value = `${today.slice(0, 8)}01`;
+    const now = new Date();
+    const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    $('#from').value = `${month}-01`;
+    $('#to').value = `${month}-${String(now.getDate()).padStart(2, '0')}`;
     await loadList();
     const id = /^\/reports\/([^/]+)$/.exec(location.pathname)?.[1];
     if (id) await showReport(id);
-  } catch (error) { $('#login').querySelector('.muted').textContent = error.message; }
+  } catch (error) {
+    sessionStorage.removeItem('bug-kit-panel-token');
+    token = '';
+    $('#login-error').textContent = error.message;
+    $('#login').hidden = false;
+    $('#workspace').hidden = true;
+    $('#header-session').hidden = true;
+  }
+}
+
+async function loadLoginProjects() {
+  const response = await fetch('/api/panel/projects');
+  if (!response.ok) throw new Error('Не удалось загрузить проекты');
+  const projects = await response.json();
+  const select = $('#login-project');
+  select.replaceChildren();
+  for (const project of projects) select.add(new Option(project.name, project.id));
+  $('#login-project-field').hidden = projects.length <= 1;
+  $('#login-button').disabled = $('#register-button').disabled = !projects.length;
+  if (!projects.length) $('#login-error').textContent = 'Для входа по PIN включите panelAccess в настройках проекта.';
+}
+
+async function signIn(mode) {
+  $('#login-error').textContent = '';
+  const body = {projectId: $('#login-project').value, name: $('#login-name').value.trim(),
+    pin: $('#login-pin').value};
+  if (!body.projectId || !body.name || !/^\d{4}$/.test(body.pin)) {
+    $('#login-error').textContent = 'Укажите имя и PIN из четырёх цифр.';
+    return;
+  }
+  $('#login-button').disabled = $('#register-button').disabled = true;
+  try {
+    const response = await fetch(`/api/panel/${mode}`, {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Не удалось войти');
+    token = result.token;
+    $('#login-pin').value = '';
+    await enter();
+  } catch (error) { $('#login-error').textContent = error.message; }
+  finally { $('#login-button').disabled = $('#register-button').disabled = false; }
 }
 
 function summaryQuery() {
   const query = new URLSearchParams({from: $('#from').value, to: $('#to').value,
-    groupBy: $('#group-by').value});
+    groupBy: 'environment'});
   if ($('#project').value) query.set('project', $('#project').value);
   return query;
 }
 
-async function showSummary() {
-  try {
-    const result = await (await api(`/api/summary?${summaryQuery()}`)).json();
-    const summary = $('#summary');
-    summary.replaceChildren();
-    textBlock(summary, 'Создано', String(result.created));
-    textBlock(summary, 'Принято исправлений', String(result.fixed));
-    textBlock(summary, 'Созданные по статусу', result.byStatus.map((item) =>
-      `${statusLabels[item.key]}: ${item.count}`).join('\n'));
-    textBlock(summary, 'Группы исправлений', result.fixedGroups.map((item) =>
-      `${item.key}: ${item.count}`).join('\n'));
-  } catch (error) { message(error.message, true); }
-}
-
-$('#token').value = token;
-$('#login-button').onclick = enter;
+$('#login-button').onclick = () => signIn('login');
+$('#register-button').onclick = () => signIn('register');
+$('#login-pin').onkeydown = (event) => { if (event.key === 'Enter') void signIn('login'); };
 $('#refresh').onclick = () => loadList().catch((error) => message(error.message, true));
 $('#project').onchange = $('#filter').onchange = () => { offset = 0; void loadList().catch((error) => message(error.message, true)); };
 $('#previous').onclick = () => { offset = Math.max(0, offset - 100); void loadList().catch((error) => message(error.message, true)); };
 $('#next').onclick = () => { offset += 100; void loadList().catch((error) => message(error.message, true)); };
-$('#show-summary').onclick = showSummary;
 $('#summary-html').onclick = async () => {
   try {
     const blob = await (await api(`/api/summary/html?${summaryQuery()}`)).blob();
@@ -248,5 +327,12 @@ $('#summary-html').onclick = async () => {
     setTimeout(() => URL.revokeObjectURL(url), 60000);
   } catch (error) { message(error.message, true); }
 };
-$('#logout').onclick = () => {sessionStorage.removeItem('bug-kit-token'); location.href = '/';};
+$('#logout').onclick = async (event) => {
+  event.preventDefault();
+  try { await api('/api/panel/logout', {method: 'POST'}); } catch { /* Expired session is already signed out. */ }
+  sessionStorage.removeItem('bug-kit-panel-token');
+  token = '';
+  location.href = '/';
+};
+void loadLoginProjects().catch((error) => { $('#login-error').textContent = error.message; });
 if (token) void enter();

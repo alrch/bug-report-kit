@@ -3,11 +3,14 @@
   "host": "127.0.0.1",
   "trustProxy": false,
   "database": "./data/reports.sqlite",
+  "reporterAuthSecret": "replace-with-a-random-secret-of-at-least-32-characters",
   "projects": [
     {
       "id": "example",
       "name": "Example project",
       "widgetKey": "replace-with-random-public-key",
+      "reporterAuth": true,
+      "panelAccess": true,
       "allowedOrigins": ["http://localhost:7338"],
       "repositories": [
         {"name": "example-web", "url": "https://github.com/owner/example-web"}

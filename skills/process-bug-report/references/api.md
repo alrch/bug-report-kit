@@ -10,11 +10,12 @@ node scripts/bug-kit-agent.mjs projects
 node scripts/bug-kit-agent.mjs list new
 node scripts/bug-kit-agent.mjs show BUG_ID
 node scripts/bug-kit-agent.mjs screenshot BUG_ID /tmp/bug-screenshot.png
+node scripts/bug-kit-agent.mjs attachment BUG_ID /tmp/bug-attachment
 node scripts/bug-kit-agent.mjs action BUG_ID /tmp/bug-action.json
 node scripts/bug-kit-agent.mjs summary 2026-10-01 2026-10-31 group
 ```
 
-The screenshot command creates a new file and refuses to overwrite an existing one. The action file is JSON and must contain the `revision` from the latest `show` plus an `action`. Example:
+The screenshot and attachment commands create new files and refuse to overwrite an existing one. The attachment is independent of the screenshot and may have any format up to 5 MB. The action file is JSON and must contain the `revision` from the latest `show` plus an `action`. Example:
 
 ```json
 {"revision": 3, "action": "ask", "note": "На какой странице это повторяется?"}
@@ -45,6 +46,7 @@ Endpoints, if the helper is unavailable:
 | GET | `/api/reports?status=new&offset=0` | Tickets, 100 per page |
 | GET | `/api/reports/ID` | Full ticket JSON and latest revision |
 | GET | `/api/reports/ID/screenshot` | Image bytes |
+| GET | `/api/reports/ID/attachment` | Original attachment bytes, if present |
 | GET | `/api/reports/ID/related` | Similar tickets |
 | GET | `/api/reports/ID/html` | Human-readable ticket |
 | PATCH | `/api/reports/ID` | JSON `{revision, action, ...}` |

@@ -1,4 +1,4 @@
-import html2canvas from 'html2canvas';
+import {captureViewport, safePageUrl} from './capture.js';
 
 const button = (label, className = '') => {
   const node = document.createElement('button');
@@ -8,8 +8,27 @@ const button = (label, className = '') => {
   return node;
 };
 
+function anonymousReporterId(projectKey) {
+  const storageKey = `bug-report-kit:reporter:${projectKey}`;
+  try {
+    const stored = localStorage.getItem(storageKey);
+    if (/^anon:[0-9a-f-]{36}$/i.test(stored || '')) return stored;
+  } catch { /* Storage can be disabled by the browser. */ }
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  const id = `anon:${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  try { localStorage.setItem(storageKey, id); } catch { /* Current page can still use this ID. */ }
+  return id;
+}
+
 async function compress(canvas) {
-  let current = canvas;
+  let current = document.createElement('canvas');
+  current.width = canvas.width; current.height = canvas.height;
+  const opaque = current.getContext('2d');
+  opaque.fillStyle = '#fff'; opaque.fillRect(0, 0, current.width, current.height);
+  opaque.drawImage(canvas, 0, 0);
   for (let pass = 0; pass < 5; pass++) {
     const url = current.toDataURL('image/jpeg', Math.max(.5, .84 - pass * .08));
     if (url.length - url.indexOf(',') - 1 <= 4 * Math.ceil(2 * 1024 * 1024 / 3)) return url;
@@ -22,7 +41,8 @@ async function compress(canvas) {
   throw new Error('Снимок слишком большой. Выделите меньшую область.');
 }
 
-function init({serverUrl, projectKey, label = 'Сообщить о баге', appVersion = '', captureFetchErrors = false} = {}) {
+function init({serverUrl, projectKey, label = 'Сообщить о баге', appVersion = '', captureFetchErrors = false, reporterAuth = false,
+  reporterName = '', reporterContact = '', getReporter = null} = {}) {
   if (!serverUrl || !projectKey) throw new Error('Нужны serverUrl и projectKey');
   const base = serverUrl.replace(/\/$/, '');
   const host = document.createElement('div');
@@ -35,7 +55,30 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', ap
   root.append(css);
   const launcher = button(label, 'launcher');
   root.append(launcher);
+  let toast = null;
+  let toastTimer = null;
+  const clearToast = () => {
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = null;
+    toast?.remove();
+    toast = null;
+  };
+  const showSuccessToast = () => {
+    clearToast();
+    toast = document.createElement('div');
+    toast.className = 'report-toast';
+    toast.setAttribute('role', 'status');
+    toast.textContent = 'Баг отправлен';
+    root.append(toast);
+    toastTimer = setTimeout(clearToast, 5000);
+  };
   const recentDiagnostics = [];
+  let guestReporterId = '';
+  let activeReporter = null;
+  let inMemoryReporterToken = '';
+  const reporterStorageKey = `bug-report-kit:auth:${projectKey}`;
+  const reporterToken = () => { try { return localStorage.getItem(reporterStorageKey) || inMemoryReporterToken; } catch { return inMemoryReporterToken; } };
+  const saveReporterToken = (token) => { inMemoryReporterToken = token; try { if (token) localStorage.setItem(reporterStorageKey, token); else localStorage.removeItem(reporterStorageKey); } catch { /* Session still works until this page closes. */ } };
   const addDiagnostic = (item) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return;
     recentDiagnostics.push({occurredAt: new Date().toISOString(), ...item});
@@ -141,112 +184,398 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', ap
   window.visualViewport?.addEventListener('scroll', schedulePlacement);
   schedulePlacement();
 
-  function showForm({screenshot, selection, error = ''}) {
+  const field = (caption, control) => {
+    const label = document.createElement('label');
+    label.className = 'field';
+    label.textContent = caption;
+    label.append(control);
+    return label;
+  };
+
+  function showAuth(onAuthenticated, initialMessage = '', onCancel = null) {
     launcher.hidden = true;
     const backdrop = document.createElement('div');
     backdrop.className = 'backdrop';
     const card = document.createElement('div');
-    card.className = 'card';
+    card.className = 'card auth-card';
+    card.setAttribute('role', 'dialog');
+    card.setAttribute('aria-modal', 'true');
+    const heading = document.createElement('h2');
+    heading.id = 'bug-kit-auth-heading';
+    card.setAttribute('aria-labelledby', heading.id);
+    heading.textContent = 'Кто сообщает о баге?';
+    const hint = document.createElement('p');
+    hint.className = 'meta';
+    hint.textContent = 'Войдите со своим именем или создайте новое. PIN — 4 цифры.';
+    const name = document.createElement('input');
+    name.type = 'text'; name.maxLength = 80; name.autocomplete = 'username';
+    name.placeholder = 'Имя или ник';
+    let suggestedAction = 'login';
+    const pin = document.createElement('input');
+    pin.type = 'password'; pin.inputMode = 'numeric'; pin.pattern = '[0-9]{4}';
+    pin.maxLength = 4; pin.autocomplete = 'current-password';
+    pin.placeholder = '4 цифры';
+    pin.setAttribute('aria-label', 'PIN из 4 цифр');
+    const clearMessage = () => { if (message.className === 'error') message.textContent = ''; };
+    name.addEventListener('input', () => {
+      clearMessage();
+      suggestedAction = 'login';
+      login.classList.add('primary');
+      register.classList.remove('primary');
+    });
+    pin.addEventListener('input', () => {
+      pin.value = pin.value.replace(/\D/g, '').slice(0, 4);
+      clearMessage();
+    });
+    const message = document.createElement('p');
+    message.className = initialMessage ? 'error' : 'meta';
+    message.textContent = initialMessage;
+    message.setAttribute('role', 'status');
+    const actions = document.createElement('div');
+    actions.className = 'row auth-actions';
+    const cancel = button('Отмена');
+    const login = button('Войти', 'primary');
+    const register = button('Создать имя');
+    const close = () => {
+      backdrop.remove();
+      window.removeEventListener('keydown', onKey);
+      if (onCancel) onCancel();
+      else { pendingCapture = null; launcher.hidden = false; schedulePlacement(); }
+    };
+    const onKey = (event) => { if (event.key === 'Escape') close(); };
+    window.addEventListener('keydown', onKey);
+    cancel.onclick = close;
+    let submitting = false;
+    async function submit(action) {
+      if (submitting) return;
+      const enteredName = name.value.trim();
+      if (enteredName.length < 2 || enteredName.length > 80) {
+        message.className = 'error'; message.textContent = 'Имя должно содержать от 2 до 80 символов'; return;
+      }
+      if (!/^\d{4}$/.test(pin.value)) {
+        message.className = 'error'; message.textContent = 'Введите PIN из 4 цифр'; return;
+      }
+      login.disabled = register.disabled = true;
+      submitting = true;
+      message.className = 'meta'; message.textContent = action === 'register' ? 'Создаём имя…' : 'Входим…';
+      try {
+        const response = await fetch(`${base}/api/reporter/${action}`, {
+          method: 'POST', headers: {'Content-Type': 'application/json', 'X-Project-Key': projectKey},
+          body: JSON.stringify({name: enteredName, pin: pin.value}),
+        });
+        const result = await response.json();
+        if (!response.ok) {
+          const failure = new Error(result.error || 'Не удалось войти');
+          failure.code = result.code;
+          throw failure;
+        }
+        if (!result.token || !result.reporter?.id || !result.reporter?.name) throw new Error('Сервер вернул неполные данные входа');
+        saveReporterToken(result.token);
+        activeReporter = result.reporter;
+        pin.value = '';
+        backdrop.remove();
+        window.removeEventListener('keydown', onKey);
+        onAuthenticated();
+      } catch (cause) {
+        message.className = 'error';
+        message.textContent = cause instanceof TypeError ? 'Нет связи с сервером. Попробуйте ещё раз.' : cause.message;
+        if (cause.code === 'name_not_found') {
+          suggestedAction = 'register';
+          login.classList.remove('primary');
+          register.classList.add('primary');
+          register.focus();
+        } else if (cause.code === 'name_taken') {
+          suggestedAction = 'login';
+          login.classList.add('primary');
+          register.classList.remove('primary');
+          login.focus();
+        } else if (cause.code === 'wrong_pin') {
+          suggestedAction = 'login';
+          pin.value = '';
+          pin.focus();
+        }
+      } finally { submitting = false; login.disabled = register.disabled = false; }
+    }
+    login.onclick = () => submit('login');
+    register.onclick = () => submit('register');
+    pin.addEventListener('keydown', (event) => { if (event.key === 'Enter') submit(suggestedAction); });
+    actions.append(cancel, register, login);
+    card.append(heading, hint, field('Имя или ник', name), field('PIN · 4 цифры', pin), message, actions);
+    backdrop.append(card);
+    root.append(backdrop);
+    name.focus();
+  }
+
+  function showForm({screenshot, selection, error = ''}) {
+    launcher.hidden = true;
+    let attachment = null;
+    let readingAttachment = false;
+    let attachmentReadId = 0;
+    const backdrop = document.createElement('div');
+    backdrop.className = 'backdrop';
+    const card = document.createElement('div');
+    card.className = 'card report-card';
     const heading = document.createElement('h2');
     heading.textContent = 'Сообщить о баге';
+    const header = document.createElement('div');
+    header.className = 'report-header';
+    header.append(heading);
+    const context = document.createElement('div');
+    context.className = 'report-context';
     const meta = document.createElement('p');
     meta.className = 'meta';
-    meta.textContent = window.location.href.split('?')[0];
+    meta.textContent = safePageUrl();
+    meta.title = meta.textContent;
     const preview = document.createElement('img');
     preview.className = 'preview';
     preview.alt = 'Выделенная область';
+    const previewFrame = document.createElement('div');
+    previewFrame.className = 'preview-frame';
+    previewFrame.hidden = !screenshot;
+    previewFrame.append(preview);
     if (screenshot) preview.src = screenshot;
     else preview.hidden = true;
-    const field = (caption, control) => {
-      const label = document.createElement('label');
-      label.className = 'field';
-      label.textContent = caption;
-      label.append(control);
-      return label;
-    };
-    const summary = document.createElement('input');
-    summary.placeholder = 'Коротко: что сломалось';
-    summary.maxLength = 160;
     const description = document.createElement('textarea');
-    description.placeholder = 'Что произошло';
-    description.maxLength = 4000;
-    const steps = document.createElement('textarea');
-    steps.placeholder = 'Шаги, если можете повторить';
-    steps.maxLength = 2000;
+    description.placeholder = 'Суть бага, шаги для воспроизведения';
+    description.setAttribute('aria-label', description.placeholder);
+    description.setAttribute('aria-required', 'true');
+    description.maxLength = 2000;
+    const descriptionCount = document.createElement('span');
+    descriptionCount.className = 'character-count';
+    descriptionCount.id = 'bug-kit-description-count';
+    descriptionCount.textContent = '0 / 2000';
+    description.setAttribute('aria-describedby', descriptionCount.id);
+    description.addEventListener('input', () => {
+      descriptionCount.textContent = `${description.value.length} / 2000`;
+    });
     const expected = document.createElement('textarea');
-    expected.placeholder = 'Что должно было произойти';
+    expected.placeholder = 'Что ожидалось';
+    expected.setAttribute('aria-label', expected.placeholder);
     expected.maxLength = 2000;
+    const expectedCount = document.createElement('span');
+    expectedCount.className = 'character-count';
+    expectedCount.id = 'bug-kit-expected-count';
+    expectedCount.textContent = '0 / 2000';
+    expected.setAttribute('aria-describedby', expectedCount.id);
+    expected.addEventListener('input', () => {
+      expectedCount.textContent = `${expected.value.length} / 2000`;
+    });
+    const reporter = document.createElement('input');
+    reporter.type = 'text';
+    reporter.maxLength = 120;
+    reporter.autocomplete = 'name';
+    let currentReporter = {};
+    try { currentReporter = !reporterAuth && typeof getReporter === 'function' ? getReporter() || {} : {}; }
+    catch { /* Identity is optional; the reporter can enter it manually. */ }
+    const accountReporterId = typeof currentReporter.id === 'string' ? currentReporter.id.trim().slice(0, 120) : '';
+    if (!reporterAuth && !accountReporterId && !guestReporterId) guestReporterId = anonymousReporterId(projectKey);
+    const reporterId = accountReporterId || guestReporterId;
+    reporter.value = typeof currentReporter.name === 'string' ? currentReporter.name.slice(0, 120) : reporterName;
+    reporter.placeholder = 'Анонимный пользователь';
+    const guestIdLabel = document.createElement('p');
+    guestIdLabel.className = 'meta';
+    guestIdLabel.textContent = `ID этого браузера: ${guestReporterId.slice(5, 13)}`;
+    const contact = document.createElement('input');
+    contact.type = 'text';
+    contact.maxLength = 240;
+    contact.autocomplete = 'email';
+    contact.value = typeof currentReporter.contact === 'string' ? currentReporter.contact.slice(0, 240) : reporterContact;
+    contact.placeholder = 'Необязательно';
     const uploadLabel = document.createElement('label');
-    uploadLabel.textContent = 'Если снимок не получился, приложите изображение: ';
+    uploadLabel.className = 'upload-action';
+    uploadLabel.title = 'Прикрепить изображение';
+    const uploadPlus = document.createElement('span');
+    uploadPlus.className = 'upload-plus';
+    uploadPlus.textContent = '+';
+    uploadPlus.setAttribute('aria-hidden', 'true');
+    const clipIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    clipIcon.setAttribute('viewBox', '0 0 24 24');
+    clipIcon.setAttribute('aria-hidden', 'true');
+    const clipPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    clipPath.setAttribute('d', 'M8.5 12.5 14.9 6.1a3 3 0 0 1 4.2 4.2l-8.8 8.8a5 5 0 0 1-7.1-7.1l9.2-9.2');
+    clipIcon.append(clipPath);
     const upload = document.createElement('input');
     upload.type = 'file';
-    upload.accept = 'image/png,image/jpeg,image/webp';
-    uploadLabel.append(upload);
+    upload.className = 'upload-input';
+    upload.setAttribute('aria-label', 'Прикрепить файл');
+    uploadLabel.append(uploadPlus, clipIcon, upload);
+    const uploadName = document.createElement('span');
+    uploadName.className = 'upload-name';
+    uploadName.hidden = true;
     upload.onchange = () => {
+      const readId = ++attachmentReadId;
       const file = upload.files?.[0];
-      if (!file) return;
-      if (file.size > 2 * 1024 * 1024) { status.textContent = 'Изображение больше 2 МБ'; return; }
+      if (!file) { readingAttachment = false; return; }
+      if (file.size > 5 * 1024 * 1024) {
+        readingAttachment = false;
+        status.textContent = 'Файл должен быть не больше 5 МБ';
+        upload.value = '';
+        attachment = null;
+        uploadName.hidden = true;
+        return;
+      }
+      attachment = null;
+      uploadName.hidden = true;
+      readingAttachment = true;
       const reader = new FileReader();
-      reader.onload = () => { screenshot = String(reader.result); preview.src = screenshot; preview.hidden = false; status.textContent = ''; };
+      reader.onload = () => {
+        if (readId !== attachmentReadId) return;
+        attachment = {name: file.name, data: String(reader.result)};
+        uploadName.textContent = file.name;
+        uploadName.title = file.name;
+        uploadName.hidden = false;
+        status.textContent = '';
+        readingAttachment = false;
+      };
+      reader.onerror = () => {
+        if (readId !== attachmentReadId) return;
+        readingAttachment = false;
+        status.textContent = 'Не удалось прочитать файл';
+      };
       reader.readAsDataURL(file);
     };
     const status = document.createElement('p');
     status.className = 'error';
+    status.id = 'bug-kit-report-status';
     status.textContent = error;
     const actions = document.createElement('div');
     actions.className = 'row';
     const cancel = button('Отмена');
-    cancel.onclick = () => { if (send.disabled) return; backdrop.remove(); launcher.hidden = false; schedulePlacement(); };
+    cancel.onclick = () => { if (status.textContent === 'Отправляем…') return; backdrop.remove(); launcher.hidden = false; schedulePlacement(); };
     const send = button('Отправить', 'primary');
+    const identity = document.createElement('p');
+    identity.className = 'meta reporter-identity';
+    const identityName = document.createElement('span');
+    const signOut = button('Выйти', 'text-action');
+    const promptToSignIn = (message, successText = 'Вход выполнен. Можно отправить баг.') => {
+      card.inert = true;
+      showAuth(() => {
+        card.inert = false;
+        identityName.textContent = `Автор: ${activeReporter.name}`;
+        signOut.textContent = 'Выйти';
+        send.disabled = false;
+        signOut.disabled = false;
+        if (send.isConnected) status.textContent = successText;
+      }, message, () => { card.inert = false; signOut.disabled = false; });
+    };
+    if (reporterAuth) {
+      identityName.textContent = `Автор: ${activeReporter?.name || 'не определён'}`;
+      signOut.onclick = () => {
+        if (signOut.disabled) return;
+        if (!activeReporter) {
+          signOut.disabled = true;
+          promptToSignIn('Войдите, чтобы отправить баг.');
+          return;
+        }
+        const token = reporterToken();
+        saveReporterToken('');
+        activeReporter = null;
+        identityName.textContent = 'Автор: не вошли';
+        send.disabled = true;
+        signOut.textContent = 'Войти';
+        signOut.disabled = true;
+        if (token) fetch(`${base}/api/reporter/logout`, {
+          method: 'POST', headers: {'X-Project-Key': projectKey, 'X-Reporter-Token': token},
+        }).catch(() => {});
+        promptToSignIn('Вы вышли. Войдите снова, чтобы отправить баг.');
+      };
+      identity.append(identityName, signOut);
+    }
+    context.append(meta, ...(reporterAuth ? [identity] : []));
     send.onclick = async () => {
-      if (!summary.value.trim() || !description.value.trim()) { status.textContent = 'Укажите название и опишите проблему'; return; }
+      if (!description.value.trim()) { status.textContent = 'Опишите суть бага'; return; }
+      if (readingAttachment) { status.textContent = 'Подождите, файл ещё загружается'; return; }
+      if (reporterAuth && (!activeReporter || !reporterToken())) { status.textContent = 'Сначала войдите или создайте имя'; return; }
       send.disabled = true;
       cancel.disabled = true;
+      if (reporterAuth) signOut.disabled = true;
       status.textContent = 'Отправляем…';
       try {
         const response = await fetch(`${base}/api/reports`, {
           method: 'POST',
-          headers: {'Content-Type': 'application/json', 'X-Project-Key': projectKey},
+          headers: {'Content-Type': 'application/json', 'X-Project-Key': projectKey, ...(reporterAuth ? {'X-Reporter-Token': reporterToken()} : {})},
           body: JSON.stringify({
-            title: summary.value.trim(),
+            title: description.value.trim().split('\n')[0].slice(0, 160),
             description: description.value.trim(),
-            steps: steps.value.trim(),
             expected: expected.value.trim(),
             actual: description.value.trim(),
-            pageUrl: window.location.href,
+            ...(reporterAuth ? {} : {reporterName: reporter.value.trim(), reporterContact: contact.value.trim(), reporterId}),
+            pageUrl: safePageUrl(),
             viewport: {width: innerWidth, height: innerHeight, pixelRatio: devicePixelRatio},
             selection,
             screenshot,
+            attachment,
             appVersion,
             userAgent: navigator.userAgent,
             diagnostics: recentDiagnostics,
           }),
         });
         const result = await response.json();
+        if (reporterAuth && response.status === 401) {
+          saveReporterToken('');
+          activeReporter = null;
+          send.disabled = false;
+          cancel.disabled = false;
+          signOut.disabled = true;
+          signOut.textContent = 'Войти';
+          status.textContent = 'Войдите снова, чтобы отправить баг.';
+          promptToSignIn('Сессия закончилась. Войдите снова, затем отправьте баг.',
+            'Вход восстановлен. Теперь отправьте баг ещё раз.');
+          return;
+        }
         if (!response.ok) throw new Error(result.error || 'Не удалось отправить');
-        status.className = 'success';
-        status.textContent = `Отправлено: ${result.id}`;
-        send.remove();
-        cancel.textContent = 'Закрыть';
-        cancel.disabled = false;
+        backdrop.remove();
+        launcher.hidden = false;
+        schedulePlacement();
+        showSuccessToast();
       } catch (cause) {
         status.className = 'error';
-        status.textContent = cause.message || 'Не удалось отправить';
+        status.textContent = cause instanceof TypeError
+          ? 'Не удалось связаться с сервером. Данные остались в форме — попробуйте отправить ещё раз.'
+          : cause.message || 'Не удалось отправить';
         send.disabled = false;
         cancel.disabled = false;
+        if (reporterAuth) signOut.disabled = false;
       }
     };
     actions.append(cancel, send);
-    card.append(heading, meta, preview, field('Название *', summary),
-      field('Что произошло *', description), field('Как повторить', steps),
-      field('Что ожидалось', expected), uploadLabel, status, actions);
+    const descriptionField = document.createElement('div');
+    descriptionField.className = 'report-field';
+    descriptionField.append(description);
+    descriptionField.append(descriptionCount);
+    const expectedField = document.createElement('div');
+    expectedField.className = 'report-field';
+    expectedField.append(expected);
+    expectedField.append(expectedCount);
+    const reportFields = document.createElement('div');
+    reportFields.className = 'report-fields';
+    reportFields.append(descriptionField, expectedField);
+    const attachmentControl = document.createElement('div');
+    attachmentControl.className = 'report-attachment';
+    attachmentControl.append(uploadLabel, uploadName);
+    const footer = document.createElement('div');
+    footer.className = 'report-footer';
+    footer.append(attachmentControl, actions);
+    card.append(header, context, previewFrame,
+      reportFields, ...(reporterAuth ? [] : [field('Кто сообщает', reporter), ...(accountReporterId ? [] : [guestIdLabel]), field('Контакт для уточнений (необязательно)', contact)]),
+      status, footer);
     backdrop.append(card);
     root.append(backdrop);
-    summary.focus();
+    description.focus();
   }
 
-  launcher.onclick = () => {
+  let pendingCapture = null;
+  const captureBeforeDismiss = (event) => {
+    if (event.button !== 0 || launcher.disabled || !event.composedPath().includes(launcher)) return;
+    event.preventDefault(); event.stopPropagation();
+    // Clone before outside-click/focus handlers dismiss the inspected popup.
+    pendingCapture = captureViewport().then(page => ({page}), error => ({error}));
+  };
+  window.addEventListener('pointerdown', captureBeforeDismiss, true);
+  async function beginSelection() {
     launcher.hidden = true;
+    const capture = await (pendingCapture || captureViewport().then(page => ({page}), error => ({error})));
+    pendingCapture = null;
     const overlay = document.createElement('div');
     overlay.className = 'overlay';
     const hint = document.createElement('div');
@@ -255,6 +584,13 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', ap
     const close = button('Отмена', 'selection-cancel');
     const box = document.createElement('div');
     box.className = 'box';
+    if (capture.page) {
+      const frozen = document.createElement('canvas');
+      frozen.width = capture.page.width; frozen.height = capture.page.height;
+      frozen.getContext('2d').drawImage(capture.page, 0, 0);
+      Object.assign(frozen.style, {position:'absolute', inset:'0', width:'100%', height:'100%', pointerEvents:'none'});
+      overlay.append(frozen);
+    }
     overlay.append(hint, close, box);
     root.append(overlay);
     let start = null;
@@ -292,33 +628,52 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', ap
       if (selection.width < 24 || selection.height < 24) return;
       overlay.remove();
       window.removeEventListener('keydown', onKey);
-      await new Promise((done) => setTimeout(done, 80));
       try {
-        const scale = Math.min(2, Math.max(1, devicePixelRatio || 1));
-        const options = {
-          scale, useCORS: true, imageTimeout: 3000, logging: false, backgroundColor: null,
-          ignoreElements: (element) => element.hasAttribute('data-bug-report-kit')
-            || (element instanceof HTMLImageElement && (!element.complete || element.naturalWidth === 0)),
-        };
-        let page;
-        try { page = await html2canvas(document.body, {...options, foreignObjectRendering: true}); }
-        catch { page = await html2canvas(document.body, options); }
-        const viewport = window.visualViewport;
+        if (capture.error) throw capture.error;
+        const page = capture.page;
+        const scale = page.width / Number(page.dataset.captureCssWidth);
         const cropped = document.createElement('canvas');
         cropped.width = Math.round(selection.width * scale);
         cropped.height = Math.round(selection.height * scale);
         cropped.getContext('2d').drawImage(page,
-          (scrollX + selection.x + (viewport?.offsetLeft || 0)) * scale,
-          (scrollY + selection.y + (viewport?.offsetTop || 0)) * scale,
+          selection.x * scale,
+          selection.y * scale,
           cropped.width, cropped.height,
           0, 0, cropped.width, cropped.height);
         showForm({screenshot: await compress(cropped), selection});
       } catch (cause) {
-        showForm({screenshot: null, selection, error: `Снимок не получился: ${cause.message}. Можно приложить файл.`});
+        showForm({screenshot: null, selection, error: `Снимок не получился: ${cause.message}. Файл можно приложить отдельно.`});
       }
     };
+  }
+  launcher.onclick = async (event) => {
+    event.stopPropagation();
+    clearToast();
+    if (!reporterAuth) { beginSelection(); return; }
+    const token = reporterToken();
+    if (!token) { showAuth(beginSelection); return; }
+    launcher.disabled = true;
+    try {
+      const response = await fetch(`${base}/api/reporter/me`, {
+        headers: {'X-Project-Key': projectKey, 'X-Reporter-Token': token},
+      });
+      const result = await response.json();
+      if (!response.ok || !result.reporter?.id || !result.reporter?.name) {
+        if (response.status === 401) saveReporterToken('');
+        activeReporter = null;
+        showAuth(beginSelection, response.status === 401 ? 'Сессия закончилась. Войдите снова.' : result.error || 'Не удалось проверить вход');
+        return;
+      }
+      activeReporter = result.reporter;
+      beginSelection();
+    } catch {
+      showAuth(beginSelection, 'Нет связи с сервером. Попробуйте войти ещё раз.');
+    } finally { launcher.disabled = false; }
   };
   return {recordDiagnostic: addDiagnostic, destroy: () => {
+    clearToast();
+    window.removeEventListener('pointerdown', captureBeforeDismiss, true);
+    pendingCapture = null;
     cancelAnimationFrame(placementFrame);
     observer.disconnect();
     window.removeEventListener('resize', schedulePlacement);
@@ -341,5 +696,9 @@ if (script?.dataset.projectKey) {
     label: script.dataset.label,
     appVersion: script.dataset.appVersion || document.querySelector('meta[name="app-version"]')?.content || '',
     captureFetchErrors: script.dataset.captureFetchErrors === 'true',
+    reporterName: script.dataset.reporterName || '',
+    reporterContact: script.dataset.reporterContact || '',
+    reporterAuth: script.dataset.reporterAuth === 'true',
+    getReporter: () => window.__BUG_REPORT_KIT_REPORTER_PROVIDER__?.() || {},
   });
 }

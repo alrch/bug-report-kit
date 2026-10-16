@@ -1,3 +1,4 @@
+import {sanitizeReportUrl} from '../shared/report-url.mjs';
 import {createServer} from 'node:http';
 import {readFileSync, existsSync, mkdirSync} from 'node:fs';
 import {dirname, resolve} from 'node:path';
@@ -6,10 +7,12 @@ import {isIP} from 'node:net';
 import {DatabaseSync} from 'node:sqlite';
 import {applyAction, STATUSES} from './workflow.mjs';
 import {getPeriodSummary, summaryHtml} from './summary.mjs';
+import {createReporterAuth} from './reporter-auth.mjs';
 
 const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);
-const MAX_BODY = 3 * 1024 * 1024;
+const MAX_BODY = 11 * 1024 * 1024;
 const MAX_IMAGE = 2 * 1024 * 1024;
+const MAX_ATTACHMENT = 5 * 1024 * 1024;
 const limiter = new Map();
 const safeText = (value, max) => typeof value === 'string' ? value.trim().slice(0, max) : '';
 const SECRET_KEY = /authorization|cookie|token|password|secret|api.?key|session/i;
@@ -39,6 +42,10 @@ const fingerprintFor = (projectId, page, title) => createHash('sha256')
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
 })[char]);
+const STATUS_LABELS = {new: 'Новый', triaged: 'В очереди',
+  in_progress: 'Исправляется', ready_for_check: 'Проверить исправление', closed: 'Исправлен',
+  cancelled: 'Отменён'};
+const htmlText = (title, value) => value ? `<section><h2>${title}</h2><p class="body">${escapeHtml(value)}</p></section>` : '';
 
 function sameToken(a, b) {
   const aa = Buffer.from(a);
@@ -63,6 +70,20 @@ function parseScreenshot(value) {
       : data.toString('ascii', 0, 4) === 'RIFF' && data.toString('ascii', 8, 12) === 'WEBP';
   if (!valid) throw new Error('Содержимое снимка не соответствует формату');
   return {mime: match[1], data};
+}
+
+function parseAttachment(value) {
+  if (!value) return null;
+  if (typeof value !== 'object' || Array.isArray(value) || typeof value.name !== 'string'
+    || typeof value.data !== 'string') throw new Error('Некорректное вложение');
+  const name = value.name.split(/[\\/]/).at(-1).replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 180);
+  if (!name) throw new Error('Укажите имя вложения');
+  const match = /^data:([^;,]*);base64,([A-Za-z0-9+/]*={0,2})$/.exec(value.data);
+  if (!match) throw new Error('Некорректные данные вложения');
+  if (match[2].length > Math.ceil(MAX_ATTACHMENT / 3) * 4 + 4) throw new Error('Файл должен быть не больше 5 МБ');
+  const data = Buffer.from(match[2], 'base64');
+  if (data.length > MAX_ATTACHMENT || data.toString('base64') !== match[2]) throw new Error('Файл должен быть не больше 5 МБ или имеет неверный формат передачи');
+  return {name, mime: safeText(match[1], 120) || 'application/octet-stream', data};
 }
 
 async function readJson(req) {
@@ -91,10 +112,15 @@ function rowToReport(row) {
     id: row.id, projectId: row.project_id, createdAt: row.created_at,
     updatedAt: row.updated_at, revision: row.revision, status: row.status,
     title: row.title || row.description.slice(0, 120), description: row.description,
+    reporterName: row.reporter_name || 'Анонимный пользователь', reporterContact: row.reporter_contact || '',
+    reporterId: row.reporter_id || '',
     steps: row.steps || '', expected: row.expected || '', actual: row.actual || '',
     pageUrl: row.page_url, origin: row.origin, userAgent: row.user_agent || '',
     environment: row.environment, appVersion: row.app_version || '', viewport: JSON.parse(row.viewport),
     selection: JSON.parse(row.selection), screenshotAvailable: Boolean(row.screenshot_available ?? row.screenshot),
+    attachmentAvailable: Boolean(row.attachment_available ?? row.attachment),
+    attachmentName: row.attachment_name || '', attachmentMime: row.attachment_mime || '',
+    attachmentSize: row.attachment_size ?? row.attachment?.length ?? 0,
     priority: row.priority || 'normal', assignee: row.assignee || '', agentState: row.agent_state || 'idle',
     pendingQuestion: row.pending_question || '', fingerprint: row.fingerprint || '', duplicateOf: row.duplicate_of || '',
     diagnostics: JSON.parse(row.diagnostics || '[]'), rootCause: row.root_cause,
@@ -115,10 +141,14 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
       id TEXT PRIMARY KEY, project_id TEXT NOT NULL, created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL, revision INTEGER NOT NULL, status TEXT NOT NULL,
       title TEXT NOT NULL DEFAULT '', description TEXT NOT NULL, steps TEXT NOT NULL DEFAULT '',
+      reporter_name TEXT NOT NULL DEFAULT 'Анонимный пользователь', reporter_contact TEXT NOT NULL DEFAULT '',
+      reporter_id TEXT NOT NULL DEFAULT '',
       expected TEXT NOT NULL DEFAULT '', actual TEXT NOT NULL DEFAULT '',
       page_url TEXT NOT NULL, origin TEXT NOT NULL, user_agent TEXT NOT NULL DEFAULT '',
       environment TEXT NOT NULL, app_version TEXT NOT NULL DEFAULT '', viewport TEXT NOT NULL, selection TEXT NOT NULL,
-      screenshot BLOB, screenshot_mime TEXT, root_cause TEXT NOT NULL DEFAULT '',
+      screenshot BLOB, screenshot_mime TEXT,
+      attachment BLOB, attachment_name TEXT NOT NULL DEFAULT '', attachment_mime TEXT NOT NULL DEFAULT '',
+      root_cause TEXT NOT NULL DEFAULT '',
       resolution TEXT NOT NULL DEFAULT '', priority TEXT NOT NULL DEFAULT 'normal',
       assignee TEXT NOT NULL DEFAULT '', agent_state TEXT NOT NULL DEFAULT 'idle',
       pending_question TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '',
@@ -130,6 +160,8 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
   const columns = new Set(db.prepare('PRAGMA table_info(reports)').all().map((column) => column.name));
   const additions = {
     app_version: "TEXT NOT NULL DEFAULT ''", title: "TEXT NOT NULL DEFAULT ''",
+    reporter_name: "TEXT NOT NULL DEFAULT 'Анонимный пользователь'", reporter_contact: "TEXT NOT NULL DEFAULT ''",
+    reporter_id: "TEXT NOT NULL DEFAULT ''",
     steps: "TEXT NOT NULL DEFAULT ''", expected: "TEXT NOT NULL DEFAULT ''",
     actual: "TEXT NOT NULL DEFAULT ''", user_agent: "TEXT NOT NULL DEFAULT ''",
     priority: "TEXT NOT NULL DEFAULT 'normal'", assignee: "TEXT NOT NULL DEFAULT ''",
@@ -137,19 +169,23 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
     fingerprint: "TEXT NOT NULL DEFAULT ''", duplicate_of: "TEXT NOT NULL DEFAULT ''",
     diagnostics: "TEXT NOT NULL DEFAULT '[]'", fix_evidence: "TEXT NOT NULL DEFAULT '{}'",
     verification_note: "TEXT NOT NULL DEFAULT ''", accepted_at: 'TEXT',
+    attachment: 'BLOB', attachment_name: "TEXT NOT NULL DEFAULT ''",
+    attachment_mime: "TEXT NOT NULL DEFAULT ''",
   };
   for (const [column, definition] of Object.entries(additions)) {
     if (!columns.has(column)) db.exec(`ALTER TABLE reports ADD COLUMN ${column} ${definition}`);
   }
   db.exec('CREATE INDEX IF NOT EXISTS reports_accepted ON reports(project_id, accepted_at);');
   db.exec('CREATE INDEX IF NOT EXISTS reports_fingerprint ON reports(project_id, fingerprint);');
+  const reporterAuth = createReporterAuth(db, config);
 
   const selectOne = db.prepare('SELECT * FROM reports WHERE id = ?');
   const insert = db.prepare(`INSERT INTO reports
     (id,project_id,created_at,updated_at,revision,status,title,description,steps,expected,actual,
      page_url,origin,user_agent,environment,app_version,viewport,selection,screenshot,screenshot_mime,
-     fingerprint,diagnostics,history)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+     attachment,attachment_name,attachment_mime,
+     fingerprint,diagnostics,history,reporter_name,reporter_contact,reporter_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
   const update = db.prepare(`UPDATE reports SET updated_at=?,revision=?,status=?,priority=?,assignee=?,
     agent_state=?,pending_question=?,root_cause=?,resolution=?,fix_evidence=?,verification_note=?,
     accepted_at=?,duplicate_of=?,history=? WHERE id=? AND revision=?`);
@@ -158,17 +194,29 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
     Array.isArray(project.allowedOrigins) && project.allowedOrigins.includes(origin));
   const actorFor = (req) => {
     const bearer = /^Bearer (.+)$/i.exec(req.headers.authorization || '')?.[1] || '';
-    return config.teamTokens.find((actor) => actor.token && sameToken(actor.token, bearer));
+    const team = config.teamTokens.find((actor) => actor.token && sameToken(actor.token, bearer));
+    if (team) return team;
+    for (const project of config.projects) {
+      if (!project.reporterAuth || !project.panelAccess) continue;
+      const account = reporterAuth.accountForToken(project, bearer);
+      if (account) return {name: account.name, role: 'reviewer', projects: [project.id]};
+    }
+    return null;
   };
   const canSee = (actor, projectId) => actor && actor.projects?.includes(projectId);
   const projectFor = (key) => config.projects.find((project) => project.widgetKey === key);
+  const clientIpFor = (req) => {
+    const forwarded = req.headers['x-real-ip'];
+    return config.trustProxy && typeof forwarded === 'string' && isIP(forwarded)
+      ? forwarded : req.socket.remoteAddress;
+  };
 
   const server = createServer(async (req, res) => {
     const origin = req.headers.origin || '';
     if (origin && allowedOrigin(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Project-Key, Authorization');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Project-Key, X-Reporter-Token, Authorization, X-Request-Id');
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
     }
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
@@ -190,12 +238,59 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
         res.end(readFileSync(resolve(import.meta.dirname, '../widget/widget.css')));
         return;
       }
+      if (req.method === 'GET' && url.pathname === '/api/panel/projects') {
+        return json(res, 200, config.projects.filter((project) => project.reporterAuth && project.panelAccess)
+          .map(({id, name}) => ({id, name: name || id})));
+      }
+      if (req.method === 'POST' && ['/api/panel/login', '/api/panel/register'].includes(url.pathname)) {
+        const body = await readJson(req);
+        const project = config.projects.find((item) => item.id === body?.projectId
+          && item.reporterAuth && item.panelAccess);
+        if (!project) return json(res, 403, {error: 'Доступ к панели для проекта не настроен'});
+        const result = url.pathname.endsWith('/register')
+          ? await reporterAuth.register(project, body, clientIpFor(req))
+          : await reporterAuth.login(project, body, clientIpFor(req));
+        const {status, ...payload} = result;
+        return json(res, status, payload);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/panel/logout') {
+        const bearer = /^Bearer (.+)$/i.exec(req.headers.authorization || '')?.[1] || '';
+        if (actorFor(req)) reporterAuth.logout(bearer);
+        return json(res, 200, {ok: true});
+      }
+      if (url.pathname.startsWith('/api/reporter/')) {
+        const project = projectFor(req.headers['x-project-key']);
+        if (!project?.reporterAuth || !origin || !project.allowedOrigins?.includes(origin)) {
+          return json(res, 403, {error: 'Проект или адрес не разрешён'});
+        }
+        if (req.method === 'POST' && url.pathname === '/api/reporter/register') {
+          const result = await reporterAuth.register(project, await readJson(req), clientIpFor(req));
+          const {status, ...payload} = result;
+          return json(res, status, payload);
+        }
+        if (req.method === 'POST' && url.pathname === '/api/reporter/login') {
+          const result = await reporterAuth.login(project, await readJson(req), clientIpFor(req));
+          const {status, ...payload} = result;
+          return json(res, status, payload);
+        }
+        const token = req.headers['x-reporter-token'];
+        if (req.method === 'GET' && url.pathname === '/api/reporter/me') {
+          const account = reporterAuth.accountForToken(project, token);
+          return account ? json(res, 200, {reporter: {id: account.id, name: account.name}})
+            : json(res, 401, {error: 'Войдите для отправки бага'});
+        }
+        if (req.method === 'POST' && url.pathname === '/api/reporter/logout') {
+          reporterAuth.logout(token);
+          return json(res, 200, {ok: true});
+        }
+        return json(res, 405, {error: 'Метод не поддерживается'});
+      }
       if (req.method === 'POST' && url.pathname === '/api/reports') {
         const project = projectFor(req.headers['x-project-key']);
         if (!project || !origin || !project.allowedOrigins?.includes(origin)) return json(res, 403, {error: 'Проект или адрес не разрешён'});
-        const forwarded = req.headers['x-real-ip'];
-        const clientIp = config.trustProxy && typeof forwarded === 'string' && isIP(forwarded)
-          ? forwarded : req.socket.remoteAddress;
+        const account = project.reporterAuth ? reporterAuth.accountForToken(project, req.headers['x-reporter-token']) : null;
+        if (project.reporterAuth && !account) return json(res, 401, {error: 'Войдите для отправки бага'});
+        const clientIp = clientIpFor(req);
         const rateKey = `${project.id}:${clientIp}`;
         const current = limiter.get(rateKey) || {count: 0, until: Date.now() + 60_000};
         if (Date.now() > current.until) { current.count = 0; current.until = Date.now() + 60_000; }
@@ -208,16 +303,16 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
         const steps = safeText(body.steps, 2000);
         const expected = safeText(body.expected, 2000);
         const actual = safeText(body.actual, 2000);
+        const reporterName = account?.name || safeText(body.reporterName, 120) || 'Анонимный пользователь';
+        const reporterContact = account ? '' : safeText(body.reporterContact, 240);
+        const reporterId = account?.id || safeText(body.reporterId, 120);
         let page;
         try { page = new URL(body.pageUrl); }
         catch { return json(res, 400, {error: 'Некорректный адрес страницы'}); }
         if (!['http:', 'https:'].includes(page.protocol) || page.origin !== origin) return json(res, 400, {error: 'Адрес страницы не совпадает с источником'});
-        page.search = '';
-        page.hash = page.hash.split('?')[0];
-        if (/^#(?:token|access_token|secret|session)[=:]/i.test(page.hash)) page.hash = '';
-        page.username = '';
-        page.password = '';
+        page = new URL(sanitizeReportUrl(page.href));
         const screenshot = parseScreenshot(body.screenshot);
+        const attachment = parseAttachment(body.attachment);
         const appVersion = safeText(body.appVersion, 120);
         const userAgent = safeText(body.userAgent, 300);
         const diagnostics = diagnosticsFrom(body.diagnostics);
@@ -229,14 +324,15 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
         insert.run(id, project.id, now, now, 0, 'new', title, description, steps, expected, actual,
           page.toString(), origin, userAgent, environmentFrom(page), appVersion,
           JSON.stringify(viewport), JSON.stringify(selection), screenshot?.data || null,
-          screenshot?.mime || null, fingerprintFor(project.id, page, title),
-          JSON.stringify(diagnostics), JSON.stringify(history));
+          screenshot?.mime || null, attachment?.data || null, attachment?.name || '', attachment?.mime || '',
+          fingerprintFor(project.id, page, title),
+          JSON.stringify(diagnostics), JSON.stringify(history), reporterName, reporterContact, reporterId);
         return json(res, 201, {id, status: 'new', reportUrl: `/reports/${id}`});
       }
 
       if (url.pathname.startsWith('/api/')) {
         const actor = actorFor(req);
-        if (!actor) return json(res, 401, {error: 'Нужен токен команды'});
+        if (!actor) return json(res, 401, {error: 'Войдите в панель'});
         if (req.method === 'GET' && url.pathname === '/api/me') {
           return json(res, 200, {name: actor.name, role: actor.role || 'admin'});
         }
@@ -271,12 +367,15 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
             title,description,steps,expected,actual,page_url,origin,user_agent,environment,app_version,
             viewport,selection,priority,assignee,agent_state,pending_question,fingerprint,duplicate_of,
             diagnostics,root_cause,resolution,fix_evidence,verification_note,accepted_at,history,
-            CASE WHEN screenshot IS NULL THEN 0 ELSE 1 END AS screenshot_available
+            reporter_name,reporter_contact,reporter_id,attachment_name,attachment_mime,
+            CASE WHEN screenshot IS NULL THEN 0 ELSE 1 END AS screenshot_available,
+            CASE WHEN attachment IS NULL THEN 0 ELSE 1 END AS attachment_available,
+            COALESCE(length(attachment),0) AS attachment_size
             FROM reports WHERE ${clauses.join(' AND ')}
             ORDER BY created_at DESC, rowid DESC LIMIT 100 OFFSET ?`).all(...params, Number(offsetRaw));
           return json(res, 200, rows.map(rowToReport));
         }
-        const match = /^\/api\/reports\/([^/]+)(?:\/(screenshot|html|related))?$/.exec(url.pathname);
+        const match = /^\/api\/reports\/([^/]+)(?:\/(screenshot|attachment|html|related))?$/.exec(url.pathname);
         if (!match) return json(res, 404, {error: 'Не найдено'});
         const row = selectOne.get(match[1]);
         if (!row) return json(res, 404, {error: 'Баг не найден'});
@@ -295,12 +394,46 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
           res.end(row.screenshot);
           return;
         }
+        if (req.method === 'GET' && match[2] === 'attachment') {
+          if (!row.attachment) return json(res, 404, {error: 'Вложение не найдено'});
+          res.writeHead(200, {'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store',
+            'Content-Disposition': `attachment; filename="attachment"; filename*=UTF-8''${encodeURIComponent(row.attachment_name)}`,
+            'X-Content-Type-Options': 'nosniff'});
+          res.end(row.attachment);
+          return;
+        }
         if (req.method === 'GET' && match[2] === 'html') {
           const report = rowToReport(row);
           const shot = row.screenshot ? `<img alt="Снимок" style="max-width:100%" src="data:${row.screenshot_mime};base64,${row.screenshot.toString('base64')}">` : '<p>Снимка нет</p>';
+          const attached = row.attachment ? `<p><a download="${escapeHtml(row.attachment_name)}" href="data:application/octet-stream;base64,${row.attachment.toString('base64')}">${escapeHtml(row.attachment_name)}</a> (${row.attachment.length} байт)</p>` : '<p>Файла нет</p>';
           const project = config.projects.find((item) => item.id === row.project_id);
           const repositories = Array.isArray(project?.repositories) ? project.repositories : [];
-          const html = `<!doctype html><html lang="ru"><meta charset="utf-8"><title>Баг ${escapeHtml(row.id)}</title><style>body{font:16px system-ui;max-width:900px;margin:3rem auto;padding:0 1rem;line-height:1.5}pre{white-space:pre-wrap}img{max-width:100%}</style><h1>${escapeHtml(report.title)}</h1><p><b>ID:</b> ${escapeHtml(row.id)} · <b>Статус:</b> ${escapeHtml(row.status)} · <b>Приоритет:</b> ${escapeHtml(report.priority)}</p><p><b>Проект:</b> ${escapeHtml(row.project_id)} · <b>Контур:</b> ${escapeHtml(row.environment)} · <b>Версия:</b> ${escapeHtml(row.app_version || 'не указана')}</p><p><b>Страница:</b> ${escapeHtml(row.page_url)} · <b>Создан:</b> ${escapeHtml(row.created_at)}</p><p><b>Репозитории:</b> ${escapeHtml(repositories.map((item) => `${item.name}: ${item.url}`).join(', ') || 'не настроены')}</p><h2>Что произошло</h2><pre>${escapeHtml(row.description)}</pre><h2>Как повторить</h2><pre>${escapeHtml(report.steps)}</pre><h2>Ожидалось</h2><pre>${escapeHtml(report.expected)}</pre><h2>Фактически</h2><pre>${escapeHtml(report.actual)}</pre><h2>Снимок</h2>${shot}<h2>Диагностика</h2><pre>${escapeHtml(JSON.stringify(report.diagnostics,null,2))}</pre><h2>Группа</h2><pre>Отпечаток: ${escapeHtml(report.fingerprint)} · Дубликат: ${escapeHtml(report.duplicateOf)}</pre><h2>Причина</h2><pre>${escapeHtml(row.root_cause)}</pre><h2>Исправление</h2><pre>${escapeHtml(row.resolution)}</pre><h2>Код и проверки</h2><pre>${escapeHtml(JSON.stringify(report.fixEvidence,null,2))}</pre><h2>Приёмка</h2><pre>${escapeHtml(report.verificationNote)}</pre><h2>История</h2><pre>${escapeHtml(JSON.stringify(report.history,null,2))}</pre></html>`;
+          const history = report.history.map((item) => `<li><time>${escapeHtml(new Date(item.at).toLocaleString('ru-RU'))}</time> · <b>${escapeHtml(item.action === 'create' ? report.reporterName : item.actor)}</b> · ${escapeHtml(STATUS_LABELS[item.status] || item.status)}${item.note ? ` — ${escapeHtml(item.note)}` : ''}</li>`).join('');
+          const html = `<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(report.title)} · Bug Report Kit</title><style>
+            *{box-sizing:border-box}body{font:16px/1.55 system-ui,sans-serif;max-width:860px;margin:0 auto;padding:28px 20px 80px;color:#182237;background:#f5f7fb}
+            main{background:#fff;border:1px solid #dfe5f0;border-radius:16px;padding:32px}h1{font-size:30px;line-height:1.2;margin:0 0 12px}h2{font-size:19px;margin:0 0 10px}
+            section{margin:26px 0}.body{white-space:pre-wrap;overflow-wrap:anywhere;margin:0}.meta{color:#58667e;margin:8px 0;overflow-wrap:anywhere}
+            .status{display:inline-block;background:#e9efff;color:#2047a5;border-radius:99px;padding:4px 12px;font-weight:700;margin:0 0 10px}
+            .capture{display:block;max-width:100%;max-height:600px;object-fit:contain;margin:auto;border:1px solid #e1e6ef;border-radius:10px}
+            .file{display:inline-block;padding:10px 14px;border:1px solid #ccd6e9;border-radius:9px;color:#2047a5;text-decoration:none}
+            details{border-top:1px solid #e3e8f0;padding:18px 0}summary{cursor:pointer;font-weight:700}ol{padding-left:24px}li{margin:10px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere}
+            @media(max-width:600px){body{padding:0;background:#fff}main{border:0;border-radius:0;padding:20px}h1{font-size:25px}}
+          </style><main><span class="status">${escapeHtml(STATUS_LABELS[report.status] || report.status)}</span><h1>${escapeHtml(report.title)}</h1>
+          <p class="meta">${escapeHtml(report.reporterName)} · ${escapeHtml(new Date(row.created_at).toLocaleString('ru-RU'))} · ${escapeHtml(row.environment)}</p>
+          <p class="meta">${escapeHtml(row.page_url)}</p>
+          ${htmlText('Суть бага', row.description)}${htmlText('Что ожидалось', report.expected)}
+          ${row.screenshot ? `<section><h2>Снимок</h2>${shot}</section>` : ''}
+          ${row.attachment ? `<section><h2>Приложенный файл</h2>${attached}</section>` : ''}
+          ${htmlText('Что исправлено', row.resolution)}${htmlText('Результат проверки', report.verificationNote)}
+          <details><summary>История изменений</summary><ol>${history}</ol></details>
+          <details><summary>Технические сведения</summary><p class="meta">ID: ${escapeHtml(row.id)} · Проект: ${escapeHtml(row.project_id)} · Версия: ${escapeHtml(row.app_version || 'не указана')}</p>
+            ${report.reporterId ? `<p class="meta">ID автора: ${escapeHtml(report.reporterId)}</p>` : ''}
+            ${report.reporterContact ? `<p class="meta">Контакт автора: ${escapeHtml(report.reporterContact)}</p>` : ''}
+            ${htmlText('Как повторить', report.steps)}${htmlText('Фактически', report.actual)}${htmlText('Причина', row.root_cause)}
+            ${htmlText('Диагностика', report.diagnostics.length ? JSON.stringify(report.diagnostics, null, 2) : '')}
+            ${htmlText('Код и проверки', Object.keys(report.fixEvidence).length ? JSON.stringify(report.fixEvidence, null, 2) : '')}
+            ${repositories.length ? htmlText('Репозитории', repositories.map((item) => `${item.name}: ${item.url}`).join('\n')) : ''}
+          </details></main></html>`;
           res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'none'; img-src data:; style-src 'unsafe-inline'"});
           res.end(html);
           return;

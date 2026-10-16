@@ -3,6 +3,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY widget widget
+COPY shared shared
 COPY scripts/build-widget.mjs scripts/build-widget.mjs
 RUN npm run build
 
@@ -11,6 +12,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app/dist dist
 COPY server server
+COPY shared shared
 COPY dashboard dashboard
 COPY widget/widget.css widget/widget.css
 COPY scripts/backup.mjs scripts/backup.mjs

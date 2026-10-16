@@ -6,48 +6,72 @@
   <title>Bug Report Kit</title>
   <style>
     *{box-sizing:border-box}body{margin:0;font:15px system-ui,sans-serif;color:#182237;background:#f4f6fa}
-    header{display:flex;align-items:center;justify-content:space-between;background:#fff;padding:16px 24px;border-bottom:1px solid #dce1e9}
-    h1{font-size:22px;margin:0}h2{font-size:20px}main{max-width:1100px;margin:24px auto;padding:0 16px}
+    header{display:flex;align-items:center;justify-content:space-between;background:#fff;padding:12px 24px;border-bottom:1px solid #dce1e9}
+    h1{font-size:22px;margin:0}h2{font-size:20px}main{max-width:1100px;margin:14px auto;padding:0 16px}
     .panel{background:#fff;border:1px solid #dce1e9;border-radius:10px;padding:18px;margin-bottom:16px}
     input,select,textarea,button{font:inherit}input,select,textarea{padding:8px;border:1px solid #a9b3c5;border-radius:6px}
+    select{appearance:none;background:#fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2346536a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 12px center;padding-right:38px}
     textarea{width:100%;min-height:90px}button{padding:8px 12px;border:1px solid #a9b3c5;background:#fff;border-radius:6px;cursor:pointer}
     button.primary{background:#2047d9;color:#fff;border-color:#2047d9}
     .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.row>*{max-width:100%}
-    .grid{display:grid;grid-template-columns:300px minmax(0,1fr);gap:16px}
+    .header-session{display:flex;align-items:center;gap:12px}.header-session[hidden],#project-filter[hidden]{display:none}.text-link{padding:0;border:0;background:none;color:#2047a5;text-decoration:underline;cursor:pointer}
+    .toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 12px;padding:0 2px}
+    .toolbar label{display:flex;align-items:center;gap:8px}.toolbar select{min-width:150px;padding-top:6px;padding-bottom:6px}
+    .toolbar input[type=date]{width:140px;padding:6px 8px}
+    .icon-button{display:inline-grid;place-items:center;width:34px;height:34px;padding:4px;border:0;background:none;color:#46536a}
+    .icon-button:hover{color:#2047d9;background:#e9efff}.icon-button svg{width:19px;height:19px}
+    .toolbar .text-link{margin-left:auto;white-space:nowrap}
+    .grid{display:grid;grid-template-columns:minmax(240px,300px) minmax(0,1fr);gap:16px}
     .list{display:grid;gap:8px;max-height:70vh;overflow:auto}.item{display:block;text-align:left;width:100%;border:1px solid #dce1e9;padding:12px;background:#fff}
-    .item:hover,.item.active{border-color:#2047d9}.item strong{display:block;margin-bottom:4px}
+    .item:hover,.item.active{border-color:#2047d9}.item.active{background:#eef2ff;box-shadow:inset 3px 0 #2047d9}.item strong{display:block;margin-bottom:6px}.item .muted{display:block}
     .muted{color:#647087;font-size:13px}.report-image{max-width:100%;max-height:420px;object-fit:contain;border:1px solid #dce1e9}
+    .attachment-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:14px 0;padding:12px;border:1px solid #dce1e9;border-radius:8px;background:#f7f9fc}
     .body{white-space:pre-wrap;overflow-wrap:anywhere}.error{color:#a52222}.success{color:#146338}
     .field{display:block;margin:12px 0}.field input,.field textarea{display:block;width:100%;margin-top:5px}
     .actions{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}.small{font-size:12px}
     .summary-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
-    @media(max-width:720px){.grid{grid-template-columns:1fr}.list{max-height:250px}}
+    .login-panel{max-width:460px;margin:60px auto;padding:28px}.login-panel h2{margin:0 0 8px}
+    .login-panel .field{font-weight:600}.login-panel .field input,.login-panel .field select{width:100%;margin-top:6px;font-weight:400}
+    .login-panel .row{margin-top:20px}.login-panel .row button{flex:1}
+    #login-error{min-height:20px;margin:14px 0 0}
+    .technical>summary{cursor:pointer;font-weight:650}
+    .technical{margin:20px 0;padding:12px;border:1px solid #dce1e9;border-radius:8px;background:#f7f9fc}
+    .technical h3{font-size:14px;margin:16px 0 4px}.technical h3:first-of-type{margin-top:12px}
+    .status{display:inline-block;margin:0 0 8px;padding:3px 9px;border-radius:99px;background:#e9efff;color:#244598;font-size:12px;font-weight:700}
+    .status-closed{background:#e4f4e9;color:#176035}.status-cancelled{background:#eff1f4;color:#4b5565}
+    .status-ready_for_check{background:#fff1d7;color:#775000}.status-in_progress{background:#e5f2ff;color:#195785}
+    .status-line{margin:0 0 18px}.page-link{display:inline-block;margin-bottom:10px;color:#2047a5;overflow-wrap:anywhere}
+    .history{border-top:1px solid #dce1e9;margin-top:20px;padding-top:4px}
+    .history-list{padding-left:22px}.history-list li{padding:8px 0}.history-list p{white-space:pre-wrap;margin:5px 0 0;color:#46536a}
+    .review-actions{padding:14px;background:#f7f9fc;border-radius:8px}.review-actions .field{flex:1 1 100%;margin:0 0 4px}
+    button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible{outline:3px solid #7790ff;outline-offset:2px}
+    @media(max-width:720px){.grid{grid-template-columns:1fr}.list{max-height:250px}.toolbar .text-link{margin-left:0}}
   </style>
 </head>
 <body>
-  <header><h1>Bug Report Kit</h1><span class="muted">Общие баги команды</span></header>
+  <header><h1>Bug Report Kit</h1><div class="header-session" id="header-session" hidden><span id="actor"></span><a class="text-link" id="logout" href="/">Выйти</a></div></header>
   <main>
-    <section class="panel" id="login">
-      <h2>Доступ команды</h2>
-      <div class="row"><input id="token" type="password" autocomplete="off" placeholder="Токен команды" size="42"><button id="login-button" class="primary">Открыть</button></div>
-      <p class="muted">Токен хранится только в этой вкладке браузера.</p>
+    <section class="panel login-panel" id="login">
+      <h2>Баги команды</h2>
+      <p class="muted">Войдите с именем и PIN, которые используете в виджете.</p>
+      <label class="field" id="login-project-field">Проект<select id="login-project"></select></label>
+      <label class="field">Имя<input id="login-name" autocomplete="username" maxlength="80"></label>
+      <label class="field">PIN<input id="login-pin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="current-password"></label>
+      <div class="row"><button id="register-button">Создать имя</button><button id="login-button" class="primary">Войти</button></div>
+      <p id="login-error" class="error" role="alert"></p>
     </section>
     <section id="workspace" hidden>
-      <div class="panel row">
-        <label>Проект <select id="project"><option value="">Все доступные</option></select></label>
-        <label>Статус <select id="filter"><option value="">Все</option><option value="new">Новые</option><option value="triaged">Разобранные</option><option value="in_progress">В работе</option><option value="ready_for_check">На проверке</option><option value="closed">Закрытые</option><option value="cancelled">Отменённые</option></select></label>
-        <button id="refresh">Обновить</button><span id="actor" class="muted"></span><button id="logout">Выйти</button>
-      </div>
-      <div class="panel">
-        <h2>Отчёт за период</h2>
-        <div class="row"><label>С <input id="from" type="date"></label><label>По <input id="to" type="date"></label>
-          <label>Группировать <select id="group-by"><option value="environment">По контуру</option><option value="project">По проекту</option><option value="group">По похожим багам</option></select></label>
-          <button id="show-summary">Показать</button><button id="summary-html">Открыть HTML</button></div>
-        <div id="summary" class="summary-list"></div>
+      <div class="toolbar">
+        <label id="project-filter" hidden>Проект <select id="project"><option value="">Все доступные</option></select></label>
+        <label>Статус <select id="filter"><option value="">Все баги</option><option value="new">Новые</option><option value="triaged">В очереди</option><option value="in_progress">Исправляются</option><option value="ready_for_check">Проверить исправление</option><option value="closed">Исправлены</option><option value="cancelled">Отменены</option></select></label>
+        <button id="refresh" class="icon-button" aria-label="Обновить очередь" title="Обновить очередь"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 6.3"/><path d="M20 4v7h-7"/></svg></button>
+        <label>С <input id="from" type="date" aria-label="Отчёт с даты"></label>
+        <label>По <input id="to" type="date" aria-label="Отчёт по дату"></label>
+        <button id="summary-html" class="text-link" title="Открыть HTML-отчёт за выбранный период">Открыть HTML-отчёт</button>
       </div>
       <p id="message"></p>
       <div class="grid">
-        <div class="panel"><h2>Баги</h2><div id="list" class="list"></div><div class="row" style="margin-top:12px"><button id="previous">Назад</button><span id="page" class="muted"></span><button id="next">Далее</button></div></div>
+        <div class="panel"><h2>Очередь багов</h2><div id="list" class="list"></div><div class="row" style="margin-top:12px"><button id="previous">Назад</button><span id="page" class="muted"></span><button id="next">Далее</button></div></div>
         <div class="panel" id="detail"><p class="muted">Выберите баг.</p></div>
       </div>
     </section>

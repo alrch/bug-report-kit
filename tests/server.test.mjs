@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync, rmSync} from 'node:fs';
+import {mkdtempSync, readFileSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFile} from 'node:child_process';
@@ -29,10 +29,19 @@ test('reporter creates a report; team reads, updates, and views HTML', async (t)
   });
   const base = `http://127.0.0.1:${app.server.address().port}`;
   assert.deepEqual(await (await fetch(`${base}/healthz`)).json(), {ok: true});
+  const preflight = await fetch(`${base}/api/reports`, {method: 'OPTIONS', headers: {
+    Origin: 'http://localhost:7338', 'Access-Control-Request-Method': 'POST',
+    'Access-Control-Request-Headers': 'content-type,x-project-key,x-request-id',
+  }});
+  assert.equal(preflight.status, 204);
+  assert.match(preflight.headers.get('access-control-allow-headers'), /\bX-Request-Id\b/i);
   assert.match(await (await fetch(`${base}/widget.css`)).text(), /\.launcher/);
   const auth = {Authorization: 'Bearer private-team-token'};
   const reviewer = {Authorization: 'Bearer reviewer-token'};
   const screenshot = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==';
+  const fileBytes = Buffer.from('broken document bytes');
+  const attachment = {name: 'export & check.docx',
+    data: `data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,${fileBytes.toString('base64')}`};
   const created = await fetch(`${base}/api/reports`, {
     method: 'POST',
     headers: {'Content-Type': 'application/json', Origin: 'http://localhost:7338',
@@ -43,7 +52,8 @@ test('reporter creates a report; team reads, updates, and views HTML', async (t)
         eventType: 'CLIENT_REQUEST_ERROR', method: 'POST', path: '/save?token=secret',
         statusCode: 500, requestId: 'REQ-123'}],
       pageUrl: 'http://localhost:7338/page?token=secret',
-      appVersion: 'dev-123', screenshot, selection: {x: 1, y: 2, width: 30, height: 40}}),
+      appVersion: 'dev-123', screenshot, attachment, selection: {x: 1, y: 2, width: 30, height: 40},
+      reporterName: 'Иван <Тест>', reporterContact: 'ivan@example.test', reporterId: 'user-42'}),
   });
   assert.equal(created.status, 201);
   const {id} = await created.json();
@@ -54,7 +64,22 @@ test('reporter creates a report; team reads, updates, and views HTML', async (t)
   assert.equal(detail.appVersion, 'dev-123');
   assert.equal(detail.pageUrl, 'http://localhost:7338/page');
   assert.equal(detail.screenshotAvailable, true);
+  assert.equal(detail.attachmentAvailable, true);
+  assert.equal(detail.attachmentName, 'export & check.docx');
+  assert.equal(detail.attachmentSize, fileBytes.length);
+  const fileResponse = await fetch(`${base}/api/reports/${id}/attachment`, {headers: auth});
+  assert.equal(fileResponse.status, 200);
+  assert.equal(fileResponse.headers.get('content-type'), 'application/octet-stream');
+  assert.match(fileResponse.headers.get('content-disposition'), /attachment; filename=/);
+  assert.deepEqual(Buffer.from(await fileResponse.arrayBuffer()), fileBytes);
   assert.equal(detail.steps, 'Нажать кнопку');
+  assert.equal(detail.reporterName, 'Иван <Тест>');
+  assert.equal(detail.reporterContact, 'ivan@example.test');
+  assert.equal(detail.reporterId, 'user-42');
+  const listed = await (await fetch(`${base}/api/reports`, {headers: auth})).json();
+  assert.equal(listed[0].reporterName, 'Иван <Тест>');
+  assert.equal(listed[0].reporterId, 'user-42');
+  assert.equal(listed[0].attachmentName, 'export & check.docx');
   assert.equal(detail.diagnostics[0].message, 'Bearer [redacted] failed');
   assert.equal(detail.diagnostics[0].path, '/save');
   assert.equal(detail.diagnostics[0].statusCode, 500);
@@ -64,6 +89,13 @@ test('reporter creates a report; team reads, updates, and views HTML', async (t)
     env: {...process.env, BUG_KIT_URL: base, BUG_KIT_TOKEN: 'private-team-token'},
   });
   assert.equal(JSON.parse(cli.stdout).id, id);
+  assert.equal(JSON.parse(cli.stdout).reporterName, 'Иван <Тест>');
+  assert.equal(JSON.parse(cli.stdout).reporterId, 'user-42');
+  const savedFile = join(directory, 'downloaded.docx');
+  await execFileAsync(process.execPath, [helper, 'attachment', id, savedFile], {
+    env: {...process.env, BUG_KIT_URL: base, BUG_KIT_TOKEN: 'private-team-token'},
+  });
+  assert.deepEqual(readFileSync(savedFile), fileBytes);
   const action = (revision, name, values = {}, headers = auth) => fetch(`${base}/api/reports/${id}`, {
     method: 'PATCH', headers: {...headers, 'Content-Type': 'application/json'},
     body: JSON.stringify({revision, action: name, ...values}),
@@ -102,8 +134,14 @@ test('reporter creates a report; team reads, updates, and views HTML', async (t)
   assert.equal(stale.status, 409);
   const html = await (await fetch(`${base}/api/reports/${id}/html`, {headers: auth})).text();
   assert.match(html, /Обработчик не привязан/);
+  assert.match(html, /Иван &lt;Тест&gt;/);
+  assert.match(html, /ivan@example\.test/);
+  assert.match(html, /user-42/);
+  assert.doesNotMatch(html, /Иван <Тест>/);
   assert.match(html, /dev-123/);
   assert.match(html, /data:image\/png;base64/);
+  assert.match(html, /export &amp; check\.docx/);
+  assert.match(html, /data:application\/octet-stream;base64/);
   assert.doesNotMatch(html, /token=secret/);
   assert.doesNotMatch(html, /hidden-token/);
   const day = new Date().toISOString().slice(0, 10);
@@ -170,6 +208,10 @@ test('existing version 0.1 database is migrated without losing reports', async (
   assert.equal(report.description, 'Старый баг');
   assert.equal(report.priority, 'normal');
   assert.equal(report.status, 'new');
+  assert.equal(report.reporterName, 'Анонимный пользователь');
+  assert.equal(report.reporterContact, '');
+  assert.equal(report.reporterId, '');
+  assert.equal(report.attachmentAvailable, false);
   app.db.prepare("UPDATE reports SET status='in_progress' WHERE id='legacy'").run();
   const claimed = await fetch(`${base}/api/reports/legacy`, {method: 'PATCH',
     headers: {Authorization: 'Bearer developer', 'Content-Type': 'application/json'},
@@ -241,6 +283,14 @@ test('origin and project access are enforced', async (t) => {
       screenshot: 'data:image/png;base64,' + Buffer.from('not a png').toString('base64')}),
   });
   assert.equal(fakeImage.status, 400);
+  const oversizedAttachment = await fetch(`${base}/api/reports`, {
+    method: 'POST', headers: {'Content-Type': 'application/json', Origin: 'http://localhost:7338',
+      'X-Project-Key': 'public-widget-key'},
+    body: JSON.stringify({description: 'Large file', pageUrl: 'http://localhost:7338/page',
+      attachment: {name: 'big.bin', data: `data:;base64,${Buffer.alloc(5 * 1024 * 1024 + 1).toString('base64')}`}}),
+  });
+  assert.equal(oversizedAttachment.status, 400);
+  assert.match((await oversizedAttachment.json()).error, /5 МБ/);
   const forbiddenList = await fetch(`${base}/api/reports?project=site`, {
     headers: {Authorization: 'Bearer other-token'},
   });
