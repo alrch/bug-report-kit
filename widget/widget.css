@@ -3,6 +3,10 @@
 button,textarea,input{font:inherit}
 button{cursor:pointer}
 .launcher{position:fixed;right:20px;bottom:20px;z-index:2147483000;border:0;border-radius:999px;padding:12px 18px;background:#2047d9;color:white;box-shadow:0 4px 18px #0004}
+.launcher-compact{top:16px;bottom:auto;width:40px;height:40px;padding:10px;border:1px solid #71809838;border-radius:12px;background:#f5f7faaa;color:#68758a;box-shadow:0 2px 8px #17203310;backdrop-filter:blur(8px);transition:background .15s,color .15s,box-shadow .15s}
+.launcher-compact:hover{background:#eef3fff0;color:#2047d9;box-shadow:0 3px 12px #17203320}
+.launcher-compact:focus-visible{outline:2px solid #2047d9;outline-offset:3px;background:#fff;color:#2047d9}
+.launcher-compact svg{display:block;width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
 .report-toast{position:fixed;right:20px;bottom:82px;z-index:2147483003;max-width:min(320px,calc(100vw - 32px));padding:11px 16px;border:1px solid #b9dfc8;border-radius:12px;background:#f0faf3;color:#17613b;font-size:13px;font-weight:600;box-shadow:0 12px 30px #17203324}
 .overlay{position:fixed;inset:0;z-index:2147483001;cursor:crosshair;background:#14213d30;touch-action:none}
 .hint{position:absolute;top:18px;left:50%;transform:translateX(-50%);border-radius:8px;background:#fff;padding:10px 14px;box-shadow:0 2px 12px #0003}

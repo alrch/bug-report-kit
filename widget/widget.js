@@ -41,7 +41,7 @@ async function compress(canvas) {
   throw new Error('Снимок слишком большой. Выделите меньшую область.');
 }
 
-function init({serverUrl, projectKey, label = 'Сообщить о баге', appVersion = '', captureFetchErrors = false, reporterAuth = false,
+function init({serverUrl, projectKey, label = 'Сообщить о баге', launcherStyle = '', appVersion = '', captureFetchErrors = false, reporterAuth = false,
   reporterName = '', reporterContact = '', getReporter = null} = {}) {
   if (!serverUrl || !projectKey) throw new Error('Нужны serverUrl и projectKey');
   const base = serverUrl.replace(/\/$/, '');
@@ -53,7 +53,13 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', ap
   css.rel = 'stylesheet';
   css.href = `${base}/widget.css`;
   root.append(css);
-  const launcher = button(label, 'launcher');
+  const compactLauncher = launcherStyle === 'compact';
+  const launcher = button(compactLauncher ? '' : label, compactLauncher ? 'launcher launcher-compact' : 'launcher');
+  if (compactLauncher) {
+    launcher.setAttribute('aria-label', label);
+    launcher.title = label;
+    launcher.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 3 1 2m5-2-1 2M8 9a4 4 0 0 1 8 0v6a4 4 0 0 1-8 0V9Zm0 2h8m-4 0v8M5 8l3 2m8 0 3-2M4 14h4m8 0h4M5 20l3-3m8 0 3 3"/></svg>';
+  }
   root.append(launcher);
   let toast = null;
   let toastTimer = null;
@@ -158,15 +164,15 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', ap
     for (let row = 0; row < 8 && !position; row += 1) {
       for (let column = 0; column * stepX < right - left && !position; column += 1) {
         const x = right - 20 - width - column * stepX;
-        const y = bottom - 20 - height - row * stepY;
+        const y = compactLauncher ? top + 16 + row * stepY : bottom - 20 - height - row * stepY;
         const box = {left: x, right: x + width, top: y, bottom: y + height};
-        if (x >= left + collisionGap && y >= top + collisionGap
+        if (x >= left + collisionGap && y >= top + collisionGap && y + height <= bottom - collisionGap
           && targets.every((rect) => !overlaps(box, rect))) position = box;
       }
     }
     // The nearest visible position still keeps the launcher usable on dense pages.
     const x = position?.left ?? Math.max(left + collisionGap, right - width - 20);
-    const y = position?.top ?? Math.max(top + collisionGap, bottom - height - 20);
+    const y = position?.top ?? (compactLauncher ? top + 16 : Math.max(top + collisionGap, bottom - height - 20));
     Object.assign(launcher.style, {left: `${x}px`, top: `${y}px`, right: 'auto', bottom: 'auto'});
   }
   const schedulePlacement = () => {
@@ -182,6 +188,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', ap
   window.addEventListener('scroll', schedulePlacement, true);
   window.visualViewport?.addEventListener('resize', schedulePlacement);
   window.visualViewport?.addEventListener('scroll', schedulePlacement);
+  css.addEventListener('load', schedulePlacement);
   schedulePlacement();
 
   const field = (caption, control) => {
@@ -694,6 +701,7 @@ if (script?.dataset.projectKey) {
     serverUrl: script.dataset.serverUrl || new URL(script.src).origin,
     projectKey: script.dataset.projectKey,
     label: script.dataset.label,
+    launcherStyle: script.dataset.launcherStyle,
     appVersion: script.dataset.appVersion || document.querySelector('meta[name="app-version"]')?.content || '',
     captureFetchErrors: script.dataset.captureFetchErrors === 'true',
     reporterName: script.dataset.reporterName || '',
