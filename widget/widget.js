@@ -140,9 +140,17 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
 
   const collisionGap = 10;
   const targetsSelector = 'button,a[href],input:not([type="hidden"]),textarea,select,[role="button"],[role="tab"],[role="combobox"],[role="link"],[aria-modal="true"]';
+  const cornerKey = `bug-report-kit:corner:${base}:${projectKey}`;
+  let manualCorner = null;
+  try {
+    const saved = localStorage.getItem(cornerKey);
+    if (['top-left', 'top-right', 'bottom-left', 'bottom-right'].includes(saved)) manualCorner = saved;
+  } catch { /* Storage may be unavailable. */ }
+  let dragState = null;
+  let suppressLauncherClick = false;
   let placementFrame = 0;
   function placeLauncher() {
-    if (launcher.hidden) return;
+    if (launcher.hidden || dragState?.moved) return;
     const viewport = window.visualViewport;
     const left = viewport?.offsetLeft || 0;
     const top = viewport?.offsetTop || 0;
@@ -150,6 +158,15 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     const bottom = top + (viewport?.height || innerHeight);
     const width = launcher.offsetWidth;
     const height = launcher.offsetHeight;
+    if (manualCorner) {
+      const x = manualCorner.endsWith('right') ? right - width - 20 : left + 20;
+      const y = manualCorner.startsWith('bottom') ? bottom - height - 16 : top + 16;
+      Object.assign(launcher.style, {
+        left: `${Math.max(left, Math.min(x, right - width))}px`,
+        top: `${Math.max(top, Math.min(y, bottom - height))}px`, right: 'auto', bottom: 'auto',
+      });
+      return;
+    }
     const targets = [...document.querySelectorAll(targetsSelector)]
       .filter((element) => !element.closest('[data-bug-report-kit]'))
       .map((element) => element.getBoundingClientRect())
@@ -574,11 +591,47 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
   let pendingCapture = null;
   const captureBeforeDismiss = (event) => {
     if (event.button !== 0 || launcher.disabled || !event.composedPath().includes(launcher)) return;
+    if (compactLauncher) {
+      suppressLauncherClick = false;
+      dragState = {id: event.pointerId, x: event.clientX, y: event.clientY,
+        rect: launcher.getBoundingClientRect(), moved: false};
+    }
     event.preventDefault(); event.stopPropagation();
     // Clone before outside-click/focus handlers dismiss the inspected popup.
     pendingCapture = captureViewport().then(page => ({page}), error => ({error}));
   };
+  const moveLauncher = (event) => {
+    if (!dragState || event.pointerId !== dragState.id) return;
+    const dx = event.clientX - dragState.x;
+    const dy = event.clientY - dragState.y;
+    if (!dragState.moved && Math.hypot(dx, dy) < 8) return;
+    dragState.moved = true;
+    suppressLauncherClick = true;
+    pendingCapture = null;
+    event.preventDefault();
+    const viewport = window.visualViewport;
+    const left = viewport?.offsetLeft || 0, top = viewport?.offsetTop || 0;
+    const right = left + (viewport?.width || innerWidth), bottom = top + (viewport?.height || innerHeight);
+    Object.assign(launcher.style, {left: `${Math.max(left, Math.min(dragState.rect.left + dx, right - launcher.offsetWidth))}px`,
+      top: `${Math.max(top, Math.min(dragState.rect.top + dy, bottom - launcher.offsetHeight))}px`, right: 'auto', bottom: 'auto'});
+  };
+  const finishLauncherDrag = (event) => {
+    if (!dragState || event.pointerId !== dragState.id) return;
+    if (dragState.moved && event.type !== 'pointercancel') {
+      const rect = launcher.getBoundingClientRect();
+      const viewport = window.visualViewport;
+      const centerX = (viewport?.offsetLeft || 0) + (viewport?.width || innerWidth) / 2;
+      const centerY = (viewport?.offsetTop || 0) + (viewport?.height || innerHeight) / 2;
+      manualCorner = `${rect.top + rect.height / 2 < centerY ? 'top' : 'bottom'}-${rect.left + rect.width / 2 < centerX ? 'left' : 'right'}`;
+      try { localStorage.setItem(cornerKey, manualCorner); } catch { /* Keep the choice for this page. */ }
+    }
+    dragState = null;
+    schedulePlacement();
+  };
   window.addEventListener('pointerdown', captureBeforeDismiss, true);
+  window.addEventListener('pointermove', moveLauncher, {capture: true, passive: false});
+  window.addEventListener('pointerup', finishLauncherDrag, true);
+  window.addEventListener('pointercancel', finishLauncherDrag, true);
   async function beginSelection() {
     launcher.hidden = true;
     const capture = await (pendingCapture || captureViewport().then(page => ({page}), error => ({error})));
@@ -655,6 +708,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
   }
   launcher.onclick = async (event) => {
     event.stopPropagation();
+    if (suppressLauncherClick) { suppressLauncherClick = false; pendingCapture = null; return; }
     clearToast();
     if (!reporterAuth) { beginSelection(); return; }
     const token = reporterToken();
@@ -680,6 +734,9 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
   return {recordDiagnostic: addDiagnostic, destroy: () => {
     clearToast();
     window.removeEventListener('pointerdown', captureBeforeDismiss, true);
+    window.removeEventListener('pointermove', moveLauncher, true);
+    window.removeEventListener('pointerup', finishLauncherDrag, true);
+    window.removeEventListener('pointercancel', finishLauncherDrag, true);
     pendingCapture = null;
     cancelAnimationFrame(placementFrame);
     observer.disconnect();

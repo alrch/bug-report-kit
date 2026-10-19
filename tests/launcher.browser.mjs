@@ -13,7 +13,7 @@ test('compact launcher avoids controls after CSS load, mutations, resize and scr
       return;
     }
     res.setHeader('Content-Type', 'text/html');
-    res.end(`<!doctype html><meta name="viewport" content="width=device-width"><style>body{margin:0;height:2400px}#save{position:fixed;right:20px;top:16px;width:120px;height:40px}</style><button id="save">Сохранить</button><script src="/widget.js" data-project-key="test" data-launcher-style="compact"></script>`);
+    res.end(`<!doctype html><meta name="viewport" content="width=device-width"><style>body{margin:0;height:2400px}#save{position:fixed;right:20px;top:16px;width:120px;height:40px}</style><button id="save">Сохранить</button><script src="/widget.js" data-project-key="${req.url === '/other' ? 'other' : 'test'}" data-launcher-style="compact"></script>`);
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
@@ -52,4 +52,36 @@ test('compact launcher avoids controls after CSS load, mutations, resize and scr
   await page.keyboard.press('Escape');
   await launcher.waitFor({state:'visible'});
   assert.equal((await settled()).x,315);
+  const dragTo = async (x,y) => {
+    const box=await launcher.boundingBox();
+    await page.mouse.move(box.x+20,box.y+20);
+    await page.mouse.down();
+    await page.mouse.move(x,y,{steps:8});
+    await page.mouse.up();
+    await settled();
+  };
+  await dragTo(30,630);
+  assert.equal(await page.locator('.overlay').count(),0,'drag must not open report');
+  let pinned=await settled();
+  assert.equal(pinned.x,20); assert.equal(pinned.y,611);
+  await page.evaluate(()=>{
+    const button=document.createElement('button');
+    button.style.cssText='position:fixed;left:20px;bottom:16px;width:80px;height:40px';
+    document.body.append(button);
+  });
+  assert.equal((await settled()).x,20,'manual placement overrides collision avoidance');
+  await page.reload();
+  pinned=await settled();
+  assert.equal(pinned.x,20); assert.equal(pinned.y,611,'corner survives reload');
+  await page.setViewportSize({width:800,height:600});
+  pinned=await settled();
+  assert.equal(pinned.x,20); assert.equal(pinned.y,544);
+  await page.goto(new URL('/other',page.url()).href);
+  assert.ok((await settled()).x>20,'another project does not inherit the corner');
+  await page.goto(new URL('/',page.url()).href);
+  assert.equal((await settled()).x,20);
+  await launcher.click();
+  await page.locator('.overlay').waitFor({state:'visible'});
+  await page.keyboard.press('Escape');
+
 });
