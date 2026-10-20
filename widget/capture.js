@@ -1,5 +1,6 @@
 import html2canvas from 'html2canvas';
 
+import {preserveCaptureText} from './capture-text.js';
 import {sanitizeReportUrl} from '../shared/report-url.mjs';
 export const safePageUrl = (href = window.location.href) => sanitizeReportUrl(href);
 
@@ -43,6 +44,7 @@ export function captureViewport() {
     ignoreElements: element => element.hasAttribute('data-bug-report-kit')
       || (element instanceof HTMLImageElement && (!element.complete || element.naturalWidth === 0)),
     onclone: async doc => {
+      preserveCaptureText(doc);
       const snapshots = await frames;
       const clones = [...doc.querySelectorAll('canvas')];
       snapshots.forEach((frame, i) => {
@@ -55,5 +57,9 @@ export function captureViewport() {
         clones[i].replaceWith(replacement);
       });
     },
-  }).then(canvas => { canvas.dataset.captureCssWidth = String(width); return canvas; });
+  }).then(canvas => {
+    canvas.dataset.captureCssWidth = String(width);
+    canvas.dataset.captureCssHeight = String(height);
+    return canvas;
+  });
 }

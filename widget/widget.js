@@ -634,8 +634,12 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
   window.addEventListener('pointercancel', finishLauncherDrag, true);
   async function beginSelection() {
     launcher.hidden = true;
-    const capture = await (pendingCapture || captureViewport().then(page => ({page}), error => ({error})));
+    let capture = await (pendingCapture || captureViewport().then(page => ({page}), error => ({error})));
     pendingCapture = null;
+    if (capture.page && (Number(capture.page.dataset.captureCssWidth) !== innerWidth
+      || Number(capture.page.dataset.captureCssHeight) !== innerHeight)) {
+      capture = await captureViewport().then(page => ({page}), error => ({error}));
+    }
     const overlay = document.createElement('div');
     overlay.className = 'overlay';
     const hint = document.createElement('div');
@@ -657,11 +661,14 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     const cancelSelection = () => {
       overlay.remove(); launcher.hidden = false; schedulePlacement();
       window.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', cancelSelection);
     };
     const onKey = (event) => { if (event.key === 'Escape') cancelSelection(); };
     close.onclick = cancelSelection;
     close.onpointerdown = (event) => event.stopPropagation();
     window.addEventListener('keydown', onKey);
+    // A frozen viewport cannot be stretched to new dimensions without corrupting crop coordinates.
+    window.addEventListener('resize', cancelSelection);
     overlay.onpointerdown = (event) => {
       if (event.button !== 0) return;
       start = {x: event.clientX, y: event.clientY};
@@ -688,6 +695,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
       if (selection.width < 24 || selection.height < 24) return;
       overlay.remove();
       window.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', cancelSelection);
       try {
         if (capture.error) throw capture.error;
         const page = capture.page;

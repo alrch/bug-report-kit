@@ -11,6 +11,7 @@ const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQ
 const listen = (server) => new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const close = (server) => new Promise((resolve) => server.close(resolve));
 const drag = async (page, x1, y1, x2, y2) => {
+  await page.locator('.overlay').waitFor({state: 'visible'});
   await page.mouse.move(x1, y1);
   await page.mouse.down();
   await page.mouse.move(x2, y2, {steps: 8});
@@ -382,6 +383,7 @@ test('widget browser regressions and reviewer handoff', async (t) => {
     try {
       await page.goto(siteOrigin);
       await page.getByRole('button', {name: 'Report issue'}).tap();
+      await page.locator('.overlay').waitFor({state: 'visible'});
       const cdp = await context.newCDPSession(page);
       const touch = (type, x, y) => cdp.send('Input.dispatchTouchEvent', {
         type, touchPoints: type === 'touchEnd' ? [] : [{x, y, id: 1}],

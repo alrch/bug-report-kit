@@ -49,6 +49,12 @@ test('compact launcher avoids controls after CSS load, mutations, resize and scr
   assert.equal(returned.x,315); assert.equal(returned.y,16);
   await launcher.click();
   await page.locator('.overlay').waitFor({state:'visible'});
+  await page.setViewportSize({width:390,height:667});
+  await page.locator('.overlay').waitFor({state:'detached'});
+  await launcher.waitFor({state:'visible'});
+  await page.setViewportSize({width:375,height:667});
+  await launcher.click();
+  await page.locator('.overlay').waitFor({state:'visible'});
   await page.keyboard.press('Escape');
   await launcher.waitFor({state:'visible'});
   assert.equal((await settled()).x,315);
