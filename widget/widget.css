@@ -72,3 +72,4 @@ textarea{display:block;width:100%;min-height:110px;padding:10px;border:1px solid
 @media(max-width:520px){.report-card{padding:22px 18px;border-radius:16px}.report-context{align-items:flex-start;flex-direction:column;gap:6px}.report-context> .meta:first-child{max-width:100%}.preview-frame{height:140px}.preview-frame .preview{max-height:118px}.report-footer .row button{padding:10px 12px}.report-toast{right:16px;bottom:76px}}
 
 .launcher-compact:active{cursor:grabbing}
+@media(max-width:600px){.hint{top:16px;left:16px;right:110px;transform:none}}
