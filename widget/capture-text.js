@@ -37,4 +37,23 @@ export function preserveCaptureText(doc) {
       input.style.setProperty('color', `rgba(${channels[0]},${channels[1]},${channels[2]},${alpha})`, 'important');
     }
   }
+  // Native textarea painting in html2canvas is single-line. Let the clone's
+  // normal layout engine wrap its value, retaining the visible scroll window.
+  for (const textarea of doc.querySelectorAll('textarea')) {
+    const style = view.getComputedStyle(textarea);
+    const box = doc.createElement('div');
+    for (const property of style) box.style.setProperty(property, style.getPropertyValue(property));
+    box.style.setProperty('overflow', 'hidden', 'important');
+    const text = doc.createElement('div');
+    Object.assign(text.style, {
+      whiteSpace: textarea.wrap === 'off' ? 'pre' : 'pre-wrap',
+      overflowWrap: 'break-word',
+      width: `${textarea.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)}px`,
+      transform: `translate(${-textarea.scrollLeft}px, ${-textarea.scrollTop}px)`,
+    });
+    text.textContent = textarea.value;
+    box.append(text);
+    textarea.replaceWith(box);
+  }
+
 }
