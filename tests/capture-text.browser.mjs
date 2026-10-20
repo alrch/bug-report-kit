@@ -14,7 +14,7 @@ test('capture keeps ellipsis and placeholder appearance without changing the liv
       p{position:absolute;left:20px;top:20px;margin:0;width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:24px}
       input{position:absolute;left:20px;top:64px;width:260px;height:32px;box-sizing:border-box;border:1px solid #ccc;padding:4px 8px;font:16px Arial;color:#111;background:white}
       textarea{position:absolute;left:20px;top:110px;width:260px;height:50px;padding:4px 8px;box-sizing:border-box;font:16px Arial;color:#111;background:white;border:1px solid #ccc}\n      input::placeholder,textarea::placeholder{color:rgba(0,0,0,.25);opacity:1}
-    </style><p>ТЕСТ AUDIT 20261016 MAIN C Г-образная</p><input placeholder="Поиск по папкам и проектам"><details><summary>Детали</summary>Сводка</details><div role="slider"></div><textarea placeholder="Прикрепите эскиз…"></textarea><script src="/capture.js"></script>`);
+    </style><p>ТЕСТ AUDIT 20261016 MAIN C Г-образная</p><input placeholder="Поиск по папкам и проектам"><details><summary>Детали</summary><div style="width:80px;height:25px;background:red">Сводка</div></details><details open style="left:150px"><summary>Открыто</summary><div style="width:80px;height:25px;background:red"></div></details><div role="slider"></div><textarea placeholder="Прикрепите эскиз…"></textarea><script src="/capture.js"></script>`);
   });
   await new Promise(resolve => server.listen(0,'127.0.0.1',resolve));
   t.after(() => new Promise(resolve=>server.close(resolve)));
@@ -30,7 +30,7 @@ test('capture keeps ellipsis and placeholder appearance without changing the liv
     await image.decode();
     const expected = document.createElement('canvas');expected.width=400;expected.height=240;
     expected.getContext('2d').drawImage(image,0,0);
-    const regions = [[205,20,35,24],[20,64,260,32],[20,110,260,50],[296,16,18,18],[12,178,85,24]];
+    const regions = [[205,20,35,24],[20,64,260,32],[20,110,260,50],[296,16,18,18],[12,178,85,24],[20,205,80,25],[150,205,80,25]];
     const differences = regions.map(([x,y,w,h]) => {
       // Browser and canvas glyph rasterizers can differ by one baseline pixel.
       return Math.min(...[-1,0,1].map(dy => {
@@ -45,6 +45,8 @@ test('capture keeps ellipsis and placeholder appearance without changing the liv
   },before.toString('base64'));
   assert.ok(result.differences[3]<.03,`slider ring pixel difference ${result.differences[3]}`);
   assert.ok(result.differences[4]<.035,`disclosure marker pixel difference ${result.differences[4]}`);
+  assert.ok(result.differences[5]<.005,`closed details leaked content ${result.differences[5]}`);
+  assert.ok(result.differences[6]<.03,`open details lost content ${result.differences[6]}`);
   assert.equal(result.unchanged,true,'capture must not mutate the live page');
   assert.ok(result.differences[0]<.025,`title pixel difference ${result.differences[0]}`);
   assert.ok(result.differences[1]<.02,`placeholder pixel difference ${result.differences[1]}`);

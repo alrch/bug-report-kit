@@ -2,6 +2,14 @@
 // zero-blur spread shadow as their only visible outline. Paint that outline
 // as a real border in the clone, without changing the slider's own geometry.
 export function preserveCaptureControls(doc) {
+  // html2canvas traverses closed details children, including text nodes that the
+  // browser hides natively. Remove them only from the isolated capture clone.
+  for (const details of doc.querySelectorAll('details:not([open])')) {
+    const summary = Array.from(details.children).find(el => el.tagName === 'SUMMARY');
+    for (const node of Array.from(details.childNodes)) {
+      if (node !== summary) node.remove();
+    }
+  }
   for (const summary of doc.querySelectorAll('summary')) {
     const style = doc.defaultView.getComputedStyle(summary);
     if (!['disclosure-closed','disclosure-open'].includes(style.listStyleType)
