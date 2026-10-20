@@ -4,7 +4,7 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY widget widget
 COPY shared shared
-COPY scripts/build-widget.mjs scripts/build-widget.mjs
+COPY scripts/build-widget.mjs scripts/html2canvas-patches.mjs scripts/
 RUN npm run build
 
 FROM node:24-bookworm-slim

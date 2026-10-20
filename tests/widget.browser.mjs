@@ -468,6 +468,54 @@ test('widget browser regressions and reviewer handoff', async (t) => {
     } finally { await page.close(); }
   });
 
+  await t.test('selection cancels on resize and keeps the page still during wheel input', async () => {
+    const page = await browser.newPage({viewport:{width:800,height:600}});
+    try {
+      await page.goto(siteOrigin);
+      await page.locator('#target').scrollIntoViewIfNeeded();
+      const scrollBefore = await page.evaluate(()=>scrollY);
+      await page.getByRole('button',{name:'Report issue'}).click();
+      await page.locator('.overlay').waitFor({state:'visible'});
+      await page.mouse.move(400,300); await page.mouse.wheel(0,300);
+      await page.waitForTimeout(100);
+      assert.equal(await page.evaluate(()=>scrollY),scrollBefore,'selection must not scroll the hidden live page');
+      await page.setViewportSize({width:760,height:580});
+      await page.locator('.overlay').waitFor({state:'detached'});
+      assert.equal(await page.locator('img.preview').count(),0);
+      await page.getByRole('button',{name:'Report issue'}).click();
+      await page.locator('.overlay').waitFor({state:'visible'});
+      await page.locator('.selection-cancel').click();
+      assert.equal(await page.locator('.overlay').count(),0);
+      await page.getByRole('button',{name:'Report issue'}).click();
+      await page.locator('.overlay').waitFor({state:'visible'});
+      await page.keyboard.press('Escape');
+      assert.equal(await page.locator('.overlay').count(),0);
+    } finally {await page.close();}
+  });
+
+  await t.test('rapid double click produces only one selection and cleanly reopens after cancel', async () => {
+    const page=await browser.newPage({viewport:{width:800,height:600}});
+    try {
+      await page.goto(siteOrigin);
+      await page.getByRole('button',{name:'Report issue'}).dblclick();
+      await page.locator('.overlay').waitFor({state:'visible'});
+      assert.equal(await page.locator('.overlay').count(),1);
+      await page.keyboard.press('Escape');
+      await page.getByRole('button',{name:'Report issue'}).click();
+      await page.locator('.overlay').waitFor({state:'visible'});
+      assert.equal(await page.locator('.overlay').count(),1);
+      await drag(page,180,220,30,140);
+      await page.locator('img.preview').waitFor({state:'visible'});
+      assert.equal(await page.locator('.report-card').count(),1);
+      await page.locator('.report-card').getByRole('button',{name:'Отмена',exact:true}).click();
+      assert.equal(await page.locator('.overlay,.report-card').count(),0);
+      await page.getByRole('button',{name:'Report issue'}).click();
+      await page.locator('.overlay').waitFor({state:'visible'});
+      await page.locator('.selection-cancel').click();
+      assert.equal(await page.locator('.overlay,.report-card').count(),0);
+    } finally {await page.close();}
+  });
+
   await t.test('failed capture keeps the screenshot absent while storing a separate file', async () => {
     const page = await browser.newPage({viewport: {width: 800, height: 600}});
     try {

@@ -639,6 +639,9 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     }
     const overlay = document.createElement('div');
     overlay.className = 'overlay';
+    // The displayed frame is frozen; scrolling its hidden page would cause a
+    // jump on cancel and make a later capture refer to a different position.
+    overlay.addEventListener('wheel', event => event.preventDefault(), {passive:false});
     const hint = document.createElement('div');
     hint.className = 'hint';
     hint.textContent = 'Выделите область мышью · Esc — отмена';
@@ -660,7 +663,10 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('resize', cancelSelection);
     };
-    const onKey = (event) => { if (event.key === 'Escape') cancelSelection(); };
+    const onKey = (event) => {
+      if (event.key === 'Escape') cancelSelection();
+      else if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown', 'Home', 'End'].includes(event.key)) event.preventDefault();
+    };
     close.onclick = cancelSelection;
     close.onpointerdown = (event) => event.stopPropagation();
     window.addEventListener('keydown', onKey);
