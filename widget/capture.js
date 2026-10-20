@@ -1,5 +1,6 @@
 import html2canvas from 'html2canvas';
 
+import {preserveCaptureControls} from './capture-controls.js';
 import {preserveCaptureText} from './capture-text.js';
 import {sanitizeReportUrl} from '../shared/report-url.mjs';
 export const safePageUrl = (href = window.location.href) => sanitizeReportUrl(href);
@@ -45,6 +46,7 @@ export function captureViewport() {
       || (element instanceof HTMLImageElement && (!element.complete || element.naturalWidth === 0)),
     onclone: async doc => {
       preserveCaptureText(doc);
+      preserveCaptureControls(doc);
       const snapshots = await frames;
       const clones = [...doc.querySelectorAll('canvas')];
       snapshots.forEach((frame, i) => {
