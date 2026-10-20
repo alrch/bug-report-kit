@@ -34,6 +34,7 @@ test('widget browser regressions and reviewer handoff', async (t) => {
     res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
     res.end(`<!doctype html><html lang="ru"><meta name="viewport" content="width=device-width,initial-scale=1"><body style="margin:0">
       <img id="svg-icon" src="/cap.svg" alt="" style="position:absolute;left:40px;top:40px;width:48px;height:48px">
+      <span style="position:absolute;left:120px;top:40px"><svg id="rotated-icon" viewBox="0 0 48 48" width="48" height="48" style="transform:rotate(270deg);transform-origin:24px 24px"><rect width="24" height="48" fill="#0645db"/></svg></span>
       <div style="height:1200px;background:white">Начало</div>
       <div id="target" style="height:250px;background:rgb(40,150,80)">Цветная область</div>
       <img src="/broken.png" alt="broken"><div style="height:900px;background:white">Конец</div>
@@ -99,6 +100,27 @@ test('widget browser regressions and reviewer handoff', async (t) => {
       });
       assert.ok(bluePixels > 100, `SVG disappeared from screenshot: ${bluePixels} blue pixels`);
     } finally { await page.close(); }
+  });
+
+  await t.test('inline SVG CSS rotation is applied exactly once', async () => {
+    const page = await browser.newPage({viewport:{width:800,height:600}});
+    try {
+      await page.goto(siteOrigin);
+      await page.getByRole('button', {name:'Report issue'}).click();
+      await page.locator('.overlay').waitFor({state:'visible'});
+      await drag(page,110,30,180,100);
+      const preview=page.locator('img.preview');
+      await preview.waitFor({state:'visible'});
+      const samples=await preview.evaluate(async img => {
+        await img.decode();
+        const canvas=document.createElement('canvas');canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;
+        const ctx=canvas.getContext('2d');ctx.drawImage(img,0,0);
+        const scale=img.naturalWidth/70;
+        return [22,46].map(y=>[...ctx.getImageData(Math.round(34*scale),Math.round(y*scale),1,1).data]);
+      });
+      assert.ok(samples[0][0]>220 && samples[0][1]>220,'top half stays white');
+      assert.ok(samples[1][0]<80 && samples[1][2]>150,'bottom half stays blue after one 270-degree rotation');
+    } finally {await page.close();}
   });
 
   await t.test('arbitrary file is stored separately from the selected screenshot', async () => {

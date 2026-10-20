@@ -29,6 +29,8 @@ export function preserveCaptureText(doc) {
   for (const input of doc.querySelectorAll('input[placeholder],textarea[placeholder]')) {
     if (input.value || !input.placeholder) continue;
     const placeholder = view.getComputedStyle(input, '::placeholder');
+    if (!/^rgba?\(/.test(placeholder.color)) continue;
+    if (input.tagName === 'TEXTAREA') input.value = input.placeholder;
     const channels = placeholder.color.match(/[\d.]+/g)?.map(Number);
     if (channels?.length >= 3) {
       const alpha = (channels[3] ?? 1) * (parseFloat(placeholder.opacity) || 0);

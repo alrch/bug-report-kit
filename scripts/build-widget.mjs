@@ -10,8 +10,13 @@ await build({
       const source = await readFile(path, 'utf8');
       const marker = 'img.src = SMALL_IMAGE;';
       if (source.split(marker).length !== 2) throw new Error('html2canvas font probe changed; review baseline patch');
+      const svgMarker = 'var s = new XMLSerializer();';
+      if (source.split(svgMarker).length !== 2) throw new Error('html2canvas SVG container changed; review transform patch');
       fontProbePatched = true;
-      return {contents: source.replace(marker, marker + "\n            img.style.display = 'inline-block';"), loader: 'js'};
+      // Parsed CSS already records the transform for the canvas renderer. Do not
+      // apply it again inside the serialized SVG image; measure untransformed bounds.
+      const patched = source.replace(svgMarker, "img.style.transform = 'none';\n        " + svgMarker);
+      return {contents: patched.replace(marker, marker + "\n            img.style.display = 'inline-block';"), loader: 'js'};
     });
   }}],
   entryPoints: ['widget/widget.js'],
