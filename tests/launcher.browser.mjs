@@ -49,6 +49,12 @@ test('compact launcher avoids controls after CSS load, mutations, resize and scr
   assert.equal(returned.x,315); assert.equal(returned.y,16);
   await launcher.click();
   await page.locator('.overlay').waitFor({state:'visible'});
+  await page.setViewportSize({width:390,height:667});
+  await page.locator('.overlay').waitFor({state:'detached'});
+  await launcher.waitFor({state:'visible'});
+  await page.setViewportSize({width:375,height:667});
+  await launcher.click();
+  await page.locator('.overlay').waitFor({state:'visible'});
   await page.keyboard.press('Escape');
   await launcher.waitFor({state:'visible'});
   assert.equal((await settled()).x,315);
@@ -69,7 +75,7 @@ test('compact launcher avoids controls after CSS load, mutations, resize and scr
     button.style.cssText='position:fixed;left:20px;bottom:16px;width:80px;height:40px';
     document.body.append(button);
   });
-  assert.equal((await settled()).x,20,'manual placement overrides collision avoidance');
+  assert.equal((await settled()).x,120,'manual corner still avoids overlapping controls with a gap');
   await page.reload();
   pinned=await settled();
   assert.equal(pinned.x,20); assert.equal(pinned.y,611,'corner survives reload');
