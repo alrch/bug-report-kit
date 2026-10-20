@@ -45,6 +45,13 @@ export function captureViewport() {
     ignoreElements: element => element.hasAttribute('data-bug-report-kit')
       || (element instanceof HTMLImageElement && (!element.complete || element.naturalWidth === 0)),
     onclone: async doc => {
+      // html2canvas temporarily resets transforms to measure untransformed boxes.
+      // A CSS transition would animate that reset and return an intermediate box,
+      // then the renderer would transform it again. Disable transitions only in
+      // the isolated clone before any normalization or bounds measurement.
+      for (const element of doc.querySelectorAll('*')) {
+        element.style?.setProperty('transition', 'none', 'important');
+      }
       preserveCaptureText(doc);
       preserveCaptureControls(doc);
       const snapshots = await frames;
