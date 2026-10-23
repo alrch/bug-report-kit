@@ -82,3 +82,5 @@ textarea{display:block;width:100%;min-height:110px;padding:10px;border:1px solid
 .screenshot-viewer-viewport{height:calc(100% - 58px);overflow:auto;background:#eef1f5;padding:12px}
 .screenshot-viewer-viewport img{display:block;width:auto;height:auto;max-width:100%;max-height:100%;margin:auto;object-fit:contain}
 .screenshot-viewer-viewport.is-actual img{max-width:none;max-height:none;margin:0}
+
+.overlay.is-preparing{background:transparent;cursor:progress}

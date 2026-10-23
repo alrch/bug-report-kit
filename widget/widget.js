@@ -642,15 +642,52 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
   window.addEventListener('pointermove', moveLauncher, {capture: true, passive: false});
   window.addEventListener('pointerup', finishLauncherDrag, true);
   window.addEventListener('pointercancel', finishLauncherDrag, true);
-  async function beginSelection() {
+  function prepareCapture() {
+    const layer = document.createElement('div');
+    layer.className = 'overlay is-preparing';
+    const hint = document.createElement('div');
+    hint.className = 'hint'; hint.textContent = 'Подготавливаем снимок… · Esc — отмена';
+    const close = button('Отмена', 'selection-cancel');
+    layer.append(hint, close); root.append(layer); syncInteraction();
     launcher.hidden = true;
-    let capture = await (pendingCapture || captureViewport().then(page => ({page}), error => ({error})));
+    const abort = new AbortController();
+    let cancelled = false, finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true; layer.remove(); syncInteraction();
+      window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('resize', cancel);
+      if (cancelActiveSelection === cancel) cancelActiveSelection = null;
+    };
+    const cancel = () => {
+      cancelled = true; pendingCapture = null; abort.abort(); finish();
+      launcher.hidden = false; schedulePlacement();
+    };
+    const onKey = event => {
+      event.preventDefault(); event.stopImmediatePropagation();
+      if (event.key === 'Escape') cancel();
+    };
+    layer.addEventListener('wheel', event => event.preventDefault(), {passive:false});
+    close.onclick = cancel;
+    window.addEventListener('keydown', onKey, true);
+    window.addEventListener('resize', cancel);
+    cancelActiveSelection = cancel;
+    return {finish, signal:abort.signal, get cancelled() { return cancelled; }};
+  }
+
+  async function beginSelection() {
+    if (destroyed) return;
+    const preparation = prepareCapture();
+    const captured = pendingCapture;
     pendingCapture = null;
+    let capture = await (captured || captureViewport().then(page => ({page}), error => ({error})));
+    if (destroyed || preparation.cancelled) { preparation.finish(); return; }
     if (capture.page && (Number(capture.page.dataset.captureCssWidth) !== innerWidth
       || Number(capture.page.dataset.captureCssHeight) !== innerHeight)) {
       capture = await captureViewport().then(page => ({page}), error => ({error}));
     }
-    if (destroyed) return;
+    preparation.finish();
+    if (destroyed || preparation.cancelled) return;
     const overlay = document.createElement('div');
     overlay.className = 'overlay';
     // The displayed frame is frozen; scrolling its hidden page would cause a
@@ -745,13 +782,17 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     const token = reporterToken();
     if (!token) { showAuth(beginSelection); return; }
     launcher.disabled = true;
+    const preparation = prepareCapture();
     try {
       const response = await fetch(`${base}/api/reporter/me`, {
+        signal: preparation.signal,
         // Same-origin GET omits Origin; POST retains the strict server origin check.
         method: 'POST',
         headers: {'X-Project-Key': projectKey, 'X-Reporter-Token': token},
       });
       const result = await response.json();
+      preparation.finish();
+      if (destroyed || preparation.cancelled) return;
       if (!response.ok || !result.reporter?.id || !result.reporter?.name) {
         if (response.status === 401) saveReporterToken('');
         activeReporter = null;
@@ -761,8 +802,9 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
       activeReporter = result.reporter;
       beginSelection();
     } catch {
-      showAuth(beginSelection, 'Нет связи с сервером. Попробуйте войти ещё раз.');
-    } finally { launcher.disabled = false; }
+      preparation.finish();
+      if (!destroyed && !preparation.cancelled) showAuth(beginSelection, 'Нет связи с сервером. Попробуйте войти ещё раз.');
+    } finally { preparation.finish(); launcher.disabled = false; }
   };
   return {recordDiagnostic: addDiagnostic, destroy: () => {
     destroyed = true;
