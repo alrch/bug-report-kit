@@ -45,6 +45,22 @@ test('idle WebGL, modern colors and SVG controls survive capture; widget release
   await page.getByRole('button',{name:'Сообщить о баге',exact:true}).click();
   await page.getByRole('textbox',{name:'Имя или ник',exact:true}).press('Escape');
   assert.equal(await page.getByRole('textbox',{name:'Имя или ник',exact:true}).count(),0);
+  // Keep the authentication request pending while a user starts drawing immediately.
+  let releaseSession;
+  const sessionReady=new Promise(resolve=>{releaseSession=resolve;});
+  await page.route('**/api/reporter/me',async route=>{
+    await sessionReady;
+    await route.fulfill({json:{reporter:{id:'fixture',name:'Fixture'}}});
+  });
+  await page.getByRole('button',{name:'Медленная сессия',exact:true}).click();
+  await page.getByRole('button',{name:'Сообщить о баге',exact:true}).click();
+  await page.getByText('Подготавливаем снимок… · Esc — отмена',{exact:true}).waitFor();
+  await page.mouse.move(80,220);await page.mouse.down();await page.mouse.move(300,350);await page.mouse.up();
+  assert.equal(await page.locator('#drags').textContent(),'Перемещений: 0');
+  await page.keyboard.press('Escape');releaseSession();
+  await page.waitForTimeout(50);
+  assert.equal(await page.locator('[data-bug-report-kit-active]').count(),0);
+  assert.equal(await page.getByText('Выделите область мышью · Esc — отмена',{exact:true}).count(),0);
   await page.getByRole('button',{name:'Включить ловитель',exact:true}).click();
   await page.getByRole('button',{name:'Сообщить о баге',exact:true}).click();
   await page.getByText('Выделите область мышью · Esc — отмена',{exact:true}).waitFor();

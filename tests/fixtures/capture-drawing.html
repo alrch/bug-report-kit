@@ -9,6 +9,7 @@ canvas,svg{width:420px;height:260px;border:1px solid #abb}
 <h1>Drawing capture regression</h1><div class="modern">Современные цвета · размеры и чертёж</div>
 <div class="drawing"><canvas width="420" height="260" aria-label="Idle WebGL"></canvas>
 <svg viewBox="0 0 420 260"><rect x="30" y="35" width="330" height="180" fill="#f3f5f7" stroke="#467"/><text x="120" y="30">Стена 3600 мм</text><foreignObject x="135" y="100" width="150" height="40"><input xmlns="http://www.w3.org/1999/xhtml" aria-label="Размер стены" value="3600" style="width:140px;height:32px;box-sizing:border-box;font:18px Arial;color:#152b3c"/></foreignObject><text x="130" y="240" transform="rotate(-8 130 240)">Отверстие Ø35</text></svg></div>
+<button id="session">Медленная сессия</button><span id="drags">Перемещений: 0</span>
 <button id="capture">Проверить снимок</button> <button id="auth">Проверить вход</button> <button id="plain">Включить ловитель</button> <button id="destroy">Удалить ловитель</button>
 <p>После удаления: <input aria-label="Клавиатура после удаления"/></p><output id="result">Готов к проверке</output><img id="captured" alt="Контрольный снимок"/>
 <script src="http://127.0.0.1:17338/widget.js"></script><script src="/capture.js"></script>
@@ -17,6 +18,10 @@ const canvas=document.querySelector('canvas');const gl=canvas.getContext('webgl'
 const draw=()=>{draws++;gl.clearColor(.2,.6,.8,1);gl.clear(gl.COLOR_BUFFER_BIT);};draw();
 canvas.addEventListener('bug-report-kit:before-canvas-capture',draw);
 let kit;
+let dragging=false, drags=0;
+canvas.addEventListener('pointerdown',()=>{dragging=true;});
+window.addEventListener('pointerup',()=>{if(dragging)document.querySelector('#drags').textContent='Перемещений: '+(++drags);dragging=false;});
+document.querySelector('#session').onclick=()=>{localStorage.setItem('bug-report-kit:auth:greta-local-visual-qa','fixture-session');mount(true);};
 const mount=auth=>{kit?.destroy();kit=BugReportKit.init({serverUrl:'http://127.0.0.1:17338',projectKey:'greta-local-visual-qa',reporterAuth:auth});};
 document.querySelector('#auth').onclick=()=>mount(true);document.querySelector('#plain').onclick=()=>mount(false);
 document.querySelector('#destroy').onclick=()=>{kit?.destroy();document.querySelector('#result').textContent='Ловитель удалён';};
