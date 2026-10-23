@@ -1,4 +1,5 @@
 import {captureViewport, safePageUrl} from './capture.js';
+import {openScreenshotPreview} from './preview.js';
 
 const button = (label, className = '') => {
   const node = document.createElement('button');
@@ -45,10 +46,16 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
   reporterName = '', reporterContact = '', getReporter = null} = {}) {
   if (!serverUrl || !projectKey) throw new Error('Нужны serverUrl и projectKey');
   const base = serverUrl.replace(/\/$/, '');
+  let destroyed = false;
+  let cancelActiveSelection = null;
   const host = document.createElement('div');
   host.dataset.bugReportKit = '';
   document.body.append(host);
   const root = host.attachShadow({mode: 'open'});
+  // Form typing and Escape belong to the reporter, not the underlying editor.
+  root.addEventListener('keydown', event => event.stopPropagation());
+  const syncInteraction = () => host.toggleAttribute('data-bug-report-kit-active',
+    Boolean(root.querySelector('.overlay, .backdrop, dialog[open]')));
   const css = document.createElement('link');
   css.rel = 'stylesheet';
   css.href = `${base}/widget.css`;
@@ -258,13 +265,13 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     const login = button('Войти', 'primary');
     const register = button('Создать имя');
     const close = () => {
-      backdrop.remove();
-      window.removeEventListener('keydown', onKey);
+      backdrop.remove(); syncInteraction();
+      root.removeEventListener('keydown', onKey);
       if (onCancel) onCancel();
       else { pendingCapture = null; launcher.hidden = false; schedulePlacement(); }
     };
     const onKey = (event) => { if (event.key === 'Escape') close(); };
-    window.addEventListener('keydown', onKey);
+    root.addEventListener('keydown', onKey);
     cancel.onclick = close;
     let submitting = false;
     async function submit(action) {
@@ -294,8 +301,8 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
         saveReporterToken(result.token);
         activeReporter = result.reporter;
         pin.value = '';
-        backdrop.remove();
-        window.removeEventListener('keydown', onKey);
+        backdrop.remove(); syncInteraction();
+        root.removeEventListener('keydown', onKey);
         onAuthenticated();
       } catch (cause) {
         message.className = 'error';
@@ -323,11 +330,12 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     actions.append(cancel, register, login);
     card.append(heading, hint, field('Имя или ник', name), field('PIN · 4 цифры', pin), message, actions);
     backdrop.append(card);
-    root.append(backdrop);
+    root.append(backdrop); syncInteraction();
     name.focus();
   }
 
   function showForm({screenshot, selection, error = ''}) {
+    if (destroyed) return;
     launcher.hidden = true;
     let attachment = null;
     let readingAttachment = false;
@@ -354,6 +362,11 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     previewFrame.className = 'preview-frame';
     previewFrame.hidden = !screenshot;
     previewFrame.append(preview);
+    if (screenshot) {
+      const zoom = button('Увеличить снимок', 'preview-zoom');
+      zoom.onclick = () => openScreenshotPreview(root, screenshot, zoom);
+      previewFrame.append(zoom);
+    }
     if (screenshot) preview.src = screenshot;
     else preview.hidden = true;
     const description = document.createElement('textarea');
@@ -462,7 +475,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     const actions = document.createElement('div');
     actions.className = 'row';
     const cancel = button('Отмена');
-    cancel.onclick = () => { if (status.textContent === 'Отправляем…') return; backdrop.remove(); launcher.hidden = false; schedulePlacement(); };
+    cancel.onclick = () => { if (status.textContent === 'Отправляем…') return; backdrop.remove(); syncInteraction(); launcher.hidden = false; schedulePlacement(); };
     const send = button('Отправить', 'primary');
     const identity = document.createElement('p');
     identity.className = 'meta reporter-identity';
@@ -545,7 +558,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
           return;
         }
         if (!response.ok) throw new Error(result.error || 'Не удалось отправить');
-        backdrop.remove();
+        backdrop.remove(); syncInteraction();
         launcher.hidden = false;
         schedulePlacement();
         showSuccessToast();
@@ -581,7 +594,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
       reportFields, ...(reporterAuth ? [] : [field('Кто сообщает', reporter), ...(accountReporterId ? [] : [guestIdLabel]), field('Контакт для уточнений (необязательно)', contact)]),
       status, footer);
     backdrop.append(card);
-    root.append(backdrop);
+    root.append(backdrop); syncInteraction();
     description.focus();
   }
 
@@ -637,6 +650,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
       || Number(capture.page.dataset.captureCssHeight) !== innerHeight)) {
       capture = await captureViewport().then(page => ({page}), error => ({error}));
     }
+    if (destroyed) return;
     const overlay = document.createElement('div');
     overlay.className = 'overlay';
     // The displayed frame is frozen; scrolling its hidden page would cause a
@@ -656,20 +670,28 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
       overlay.append(frozen);
     }
     overlay.append(hint, close, box);
-    root.append(overlay);
+    root.append(overlay); syncInteraction();
     let start = null;
-    const cancelSelection = () => {
-      overlay.remove(); launcher.hidden = false; schedulePlacement();
-      window.removeEventListener('keydown', onKey);
+    const finishSelection = () => {
+      overlay.remove(); syncInteraction();
+      window.removeEventListener('keydown', onKey, true);
       window.removeEventListener('resize', cancelSelection);
+      cancelActiveSelection = null;
     };
+    const cancelSelection = () => {
+      finishSelection(); launcher.hidden = false; schedulePlacement();
+    };
+    cancelActiveSelection = cancelSelection;
     const onKey = (event) => {
+      // Block shortcuts while the frame is frozen. Earlier application capture
+      // listeners must honor the public active marker on the widget host.
+      event.preventDefault();
+      event.stopImmediatePropagation();
       if (event.key === 'Escape') cancelSelection();
-      else if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown', 'Home', 'End'].includes(event.key)) event.preventDefault();
     };
     close.onclick = cancelSelection;
     close.onpointerdown = (event) => event.stopPropagation();
-    window.addEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKey, true);
     // A frozen viewport cannot be stretched to new dimensions without corrupting crop coordinates.
     window.addEventListener('resize', cancelSelection);
     overlay.onpointerdown = (event) => {
@@ -696,9 +718,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
       };
       start = null;
       if (selection.width < 24 || selection.height < 24) return;
-      overlay.remove();
-      window.removeEventListener('keydown', onKey);
-      window.removeEventListener('resize', cancelSelection);
+      finishSelection();
       try {
         if (capture.error) throw capture.error;
         const page = capture.page;
@@ -743,6 +763,8 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     } finally { launcher.disabled = false; }
   };
   return {recordDiagnostic: addDiagnostic, destroy: () => {
+    destroyed = true;
+    cancelActiveSelection?.();
     clearToast();
     window.removeEventListener('pointerdown', captureBeforeDismiss, true);
     window.removeEventListener('pointermove', moveLauncher, true);

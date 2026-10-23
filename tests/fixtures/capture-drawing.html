@@ -1,0 +1,26 @@
+<!doctype html><meta charset="utf-8"><title>Drawing capture regression</title>
+<style>
+body{margin:0;padding:24px;font:16px Arial;color:#152b3c;background:#fff}
+.drawing{display:flex;gap:20px;margin-top:20px}
+canvas,svg{width:420px;height:260px;border:1px solid #abb}
+.modern{padding:16px;background:color-mix(in srgb,#69c 70%,white);color:oklch(.25 .04 230);border:4px solid color(srgb .2 .4 .6);box-shadow:0 2px 5px color(srgb .1 .2 .3 / .3)}
+#result{display:block;white-space:pre-wrap;margin:20px 0}#captured{max-width:100%;border:1px solid #ddd}
+</style>
+<h1>Drawing capture regression</h1><div class="modern">Современные цвета · размеры и чертёж</div>
+<div class="drawing"><canvas width="420" height="260" aria-label="Idle WebGL"></canvas>
+<svg viewBox="0 0 420 260"><rect x="30" y="35" width="330" height="180" fill="#f3f5f7" stroke="#467"/><text x="120" y="30">Стена 3600 мм</text><foreignObject x="135" y="100" width="150" height="40"><input xmlns="http://www.w3.org/1999/xhtml" aria-label="Размер стены" value="3600" style="width:140px;height:32px;box-sizing:border-box;font:18px Arial;color:#152b3c"/></foreignObject><text x="130" y="240" transform="rotate(-8 130 240)">Отверстие Ø35</text></svg></div>
+<button id="capture">Проверить снимок</button> <button id="auth">Проверить вход</button> <button id="plain">Включить ловитель</button> <button id="destroy">Удалить ловитель</button>
+<p>После удаления: <input aria-label="Клавиатура после удаления"/></p><output id="result">Готов к проверке</output><img id="captured" alt="Контрольный снимок"/>
+<script src="http://127.0.0.1:17338/widget.js"></script><script src="/capture.js"></script>
+<script>
+const canvas=document.querySelector('canvas');const gl=canvas.getContext('webgl');let draws=0;
+const draw=()=>{draws++;gl.clearColor(.2,.6,.8,1);gl.clear(gl.COLOR_BUFFER_BIT);};draw();
+canvas.addEventListener('bug-report-kit:before-canvas-capture',draw);
+let kit;
+const mount=auth=>{kit?.destroy();kit=BugReportKit.init({serverUrl:'http://127.0.0.1:17338',projectKey:'greta-local-visual-qa',reporterAuth:auth});};
+document.querySelector('#auth').onclick=()=>mount(true);document.querySelector('#plain').onclick=()=>mount(false);
+document.querySelector('#destroy').onclick=()=>{kit?.destroy();document.querySelector('#result').textContent='Ловитель удалён';};
+// Test-only outside control can remove the widget while its overlay is active.
+window.addEventListener('keydown',e=>{if(e.code==='F8'){kit?.destroy();document.querySelector('#result').textContent='Ловитель удалён';}},true);
+document.querySelector('#capture').onclick=async()=>{const original=document.querySelector('.drawing').outerHTML;const before=draws;try{const snapshot=await captureTest.captureViewport();const scale=snapshot.width/innerWidth;const r=canvas.getBoundingClientRect();const pixel=snapshot.getContext('2d').getImageData((r.left+210)*scale,(r.top+130)*scale,1,1).data;document.querySelector('#captured').src=snapshot.toDataURL('image/png');document.querySelector('#result').textContent=JSON.stringify({renderedBeforeRead:draws===before+1,webglPixel:[...pixel],liveDrawingUnchanged:original===document.querySelector('.drawing').outerHTML},null,2);}catch(e){document.querySelector('#result').textContent=e.stack;}};
+</script>
