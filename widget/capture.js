@@ -1,6 +1,7 @@
 import html2canvas from 'html2canvas';
 
 import {preserveCaptureControls} from './capture-controls.js';
+import {preserveCaptureColors} from './capture-colors.js';
 import {preserveCaptureText} from './capture-text.js';
 import {sanitizeReportUrl} from '../shared/report-url.mjs';
 export const safePageUrl = (href = window.location.href) => sanitizeReportUrl(href);
@@ -14,7 +15,10 @@ function canvasFrames(canvases) {
       if (finished) return;
       finished = true; clearTimeout(timer);
       resolve(canvases.map(canvas => {
-        if (!canvas.width || !canvas.height) return null;
+        const rect = canvas.getBoundingClientRect();
+        if (!canvas.width || !canvas.height || !rect.width || !rect.height
+          || rect.right <= 0 || rect.bottom <= 0 || rect.left >= innerWidth || rect.top >= innerHeight) return null;
+        canvas.dispatchEvent(new Event('bug-report-kit:before-canvas-capture'));
         try {
           const frame = document.createElement('canvas');
           frame.width = canvas.width; frame.height = canvas.height;
@@ -52,6 +56,7 @@ export function captureViewport() {
       for (const element of doc.querySelectorAll('*')) {
         element.style?.setProperty('transition', 'none', 'important');
       }
+      preserveCaptureColors(doc);
       preserveCaptureText(doc);
       preserveCaptureControls(doc);
       const snapshots = await frames;
