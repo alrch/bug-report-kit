@@ -747,6 +747,8 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     launcher.disabled = true;
     try {
       const response = await fetch(`${base}/api/reporter/me`, {
+        // Same-origin GET omits Origin; POST retains the strict server origin check.
+        method: 'POST',
         headers: {'X-Project-Key': projectKey, 'X-Reporter-Token': token},
       });
       const result = await response.json();

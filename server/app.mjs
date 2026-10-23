@@ -274,7 +274,7 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
           return json(res, status, payload);
         }
         const token = req.headers['x-reporter-token'];
-        if (req.method === 'GET' && url.pathname === '/api/reporter/me') {
+        if (['GET', 'POST'].includes(req.method) && url.pathname === '/api/reporter/me') {
           const account = reporterAuth.accountForToken(project, token);
           return account ? json(res, 200, {reporter: {id: account.id, name: account.name}})
             : json(res, 401, {error: 'Войдите для отправки бага'});

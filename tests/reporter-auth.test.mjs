@@ -100,6 +100,17 @@ test('reporter PIN account owns report identity and survives server restart', as
     'X-Project-Key': 'site-key', 'X-Reporter-Token': token}});
   assert.equal(me.status, 200);
   assert.deepEqual((await me.json()).reporter, reporter);
+  const sameOriginCheck = await post('/api/reporter/me', 'site-key', {}, token);
+  assert.equal(sameOriginCheck.status, 200);
+  assert.deepEqual((await sameOriginCheck.json()).reporter, reporter);
+  for (const requestOrigin of ['', 'https://foreign.example']) {
+    const denied = await fetch(`${base}/api/reporter/me`, {method:'POST', headers:{
+      ...(requestOrigin ? {Origin:requestOrigin} : {}),
+      'X-Project-Key':'site-key','X-Reporter-Token':token,
+    }});
+    assert.equal(denied.status, 403, 'Origin remains mandatory and allowlisted');
+  }
+
   assert.equal((await post('/api/reporter/logout', 'site-key', {}, token)).status, 200);
   assert.equal((await post('/api/reports', 'site-key', spoofed, token)).status, 401);
   assert.equal((await fetch(`${base}/api/me`, {headers: panelHeaders})).status, 200);
