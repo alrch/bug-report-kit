@@ -11,7 +11,36 @@ export function html2canvasPatches() {
         source=source.replace(marker,replacement);
       };
       replace('img.src = SMALL_IMAGE;',"img.src = SMALL_IMAGE;\n            img.style.display = 'inline-block';");
-      replace('var s = new XMLSerializer();',"img.style.transform = 'none';\n        var s = new XMLSerializer();");
+      // html2canvas paints the SVG element's CSS box, then draws the serialized
+      // SVG into its content box. Serializing the same border/padding/margin
+      // paints a second, inset frame and shifts/scales the drawing. Keep CSS
+      // layout/decorations in the outer renderer and serialize only its content.
+      const svgSource = source.match(/var s = new XMLSerializer\(\);[\s\S]*?_this\.intrinsicHeight = img\.height\.baseVal\.value;/)?.[0];
+      if (!svgSource) throw new Error('html2canvas SVG container changed');
+      const expectedSvg = `var s = new XMLSerializer();
+        var bounds = parseBounds(context, img);
+        img.setAttribute('width', bounds.width + "px");
+        img.setAttribute('height', bounds.height + "px");
+        _this.svg = "data:image/svg+xml," + encodeURIComponent(s.serializeToString(img));
+        _this.intrinsicWidth = img.width.baseVal.value;
+        _this.intrinsicHeight = img.height.baseVal.value;`;
+      if (svgSource.replace(/\s+/g, ' ') !== expectedSvg.replace(/\s+/g, ' ')) throw new Error('html2canvas SVG container changed; review serialization');
+      replace(svgSource, `var s = new XMLSerializer();
+        var bounds = contentBox(_this);
+        var svg = img.cloneNode(true);
+        for (var property of ['border', 'padding', 'margin']) svg.style.setProperty(property, '0', 'important');
+        svg.style.setProperty('box-sizing', 'content-box', 'important');
+        svg.style.setProperty('transform', 'none', 'important');
+        svg.style.setProperty('background', 'transparent', 'important');
+        svg.style.setProperty('box-shadow', 'none', 'important');
+        svg.style.setProperty('opacity', '1', 'important');
+        svg.style.setProperty('width', bounds.width + 'px', 'important');
+        svg.style.setProperty('height', bounds.height + 'px', 'important');
+        svg.setAttribute('width', bounds.width + "px");
+        svg.setAttribute('height', bounds.height + "px");
+        _this.svg = "data:image/svg+xml," + encodeURIComponent(s.serializeToString(svg));
+        _this.intrinsicWidth = bounds.width;
+        _this.intrinsicHeight = bounds.height;`);
       // Reversing only the corner order makes rounded mask paths self-intersect.
       // Reverse each Bezier's direction as well to cut out the entire surface.
       replace('this.formatPath(paths.slice(0).reverse());','this.formatPath(paths.slice(0).reverse().map(function(point) { return isBezierCurve(point) ? point.reverse() : point; }));');

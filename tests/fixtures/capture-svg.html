@@ -1,0 +1,19 @@
+<!doctype html><meta charset="utf-8"><title>SVG CSS box capture regression</title>
+<style>body{margin:0;background:white;font:18px Arial}h1{margin:16px}svg{position:absolute;left:28px;top:78px;width:300px;height:180px;border:4px solid #c026d3;padding:10px;margin:12px;box-sizing:content-box;background:#fef9c3}#second{left:430px;width:328px;height:208px;box-sizing:border-box;padding:10px;margin:12px}button{position:absolute;left:28px;top:360px;padding:12px;font:inherit}output{position:absolute;left:28px;top:420px;white-space:pre-wrap}#captured{position:absolute;top:620px;max-width:100%}</style>
+<h1>SVG: одна рамка, исходные размеры и внутренние линии</h1>
+<svg id="first" viewBox="0 0 300 180"><rect x="20" y="20" width="260" height="140" fill="#38bdf8" stroke="#172554" stroke-width="4"/><text x="55" y="95" font-size="22">SVG: 12.4 м</text></svg>
+<svg id="second" width="300" height="180"><path d="M20 150L145 20L280 150Z" fill="#bef264" stroke="#172554" stroke-width="4"/><text x="80" y="120" font-size="22">8.6 м</text></svg>
+<button id="capture">Проверить SVG</button><output id="result">Готов к проверке</output><img id="captured" alt="Снимок SVG"/>
+<script src="/capture.js"></script><script>
+document.querySelector('#capture').onclick=async()=>{
+ const originals=[...document.querySelectorAll('svg')].map(s=>s.outerHTML);
+ try{
+ const image=await captureTest.captureViewport(),ctx=image.getContext('2d'),scale=image.width/innerWidth;
+ const cases=[...document.querySelectorAll('svg')].map(svg=>{const r=svg.getBoundingClientRect();let count=0,inside=false;
+ for(let y=0;y<r.height;y++){const [red,green,blue]=ctx.getImageData(Math.floor((r.left+r.width/2)*scale),Math.floor((r.top+y+.5)*scale),1,1).data;const pink=red>150&&green<100&&blue>150;if(pink&&!inside)count++;inside=pink;}
+ return {id:svg.id,magentaBorderSegments:count,box:[r.width,r.height]};});
+ document.querySelector('#captured').src=image.toDataURL('image/png');
+ document.querySelector('#result').textContent=JSON.stringify({passed:cases.every(c=>c.magentaBorderSegments===2)&&originals.every((s,i)=>s===[...document.querySelectorAll('svg')][i].outerHTML),cases,scale,liveDomUnchanged:originals.every((s,i)=>s===[...document.querySelectorAll('svg')][i].outerHTML)},null,2);
+ }catch(e){document.querySelector('#result').textContent=e.stack;}
+};
+</script>
