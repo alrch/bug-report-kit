@@ -20,7 +20,7 @@ export function parseAudio(value) {
 }
 
 // Jobs and original bytes live in the same SQLite backup as the report.
-export function audioStore(db, config = {}) {
+export function audioStore(db, config = {}, {projectIds} = {}) {
   db.exec(`CREATE TABLE IF NOT EXISTS report_audio (
     report_id TEXT PRIMARY KEY REFERENCES reports(id), data BLOB NOT NULL, mime TEXT NOT NULL,
     state TEXT NOT NULL, transcript TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '',
@@ -54,6 +54,9 @@ export function audioStore(db, config = {}) {
   };
   const command = config.command;
   const enabled = Array.isArray(command) && command.length && command.every(x => typeof x === 'string' && x.length);
+  const allowedProject = project => projectIds === undefined || projectIds.includes(project);
+  const allowedReport = id => projectIds === undefined || allowedProject(db.prepare('SELECT project_id FROM reports WHERE id=?').get(id)?.project_id);
+  const projectParams = projectIds?.map(() => '?').join(',');
   const timeout = Math.max(1000, Math.min(config.timeoutMs || 300000, 600000));
   let closed = false, running = false, child = null;
   const metadata = id => {
@@ -65,13 +68,18 @@ export function audioStore(db, config = {}) {
   const timer = setInterval(() => {cleanup(); void pump();}, 2000);
   timer.unref();
   async function pump() {
-    if (closed || running || !enabled) return;
+    if (closed || running || !enabled || projectIds?.length === 0) return;
     running = true;
     let directory;
     try {
       cleanup();
-      const draft = db.prepare("SELECT *,id AS report_id FROM transcription_drafts WHERE state='pending' OR (state='processing' AND started_at<?) ORDER BY rowid LIMIT 1").get(Date.now() - timeout - 10000);
-      const row = draft || db.prepare("SELECT * FROM report_audio WHERE state='pending' OR (state='processing' AND started_at<?) ORDER BY rowid LIMIT 1").get(Date.now() - timeout - 10000);
+      const stale = Date.now() - timeout - 10000;
+      const draft = projectIds === undefined
+        ? db.prepare("SELECT *,id AS report_id FROM transcription_drafts WHERE state='pending' OR (state='processing' AND started_at<?) ORDER BY rowid LIMIT 1").get(stale)
+        : db.prepare(`SELECT *,id AS report_id FROM transcription_drafts WHERE project_id IN (${projectParams}) AND (state='pending' OR (state='processing' AND started_at<?)) ORDER BY rowid LIMIT 1`).get(...projectIds,stale);
+      const row = draft || (projectIds === undefined
+        ? db.prepare("SELECT * FROM report_audio WHERE state='pending' OR (state='processing' AND started_at<?) ORDER BY rowid LIMIT 1").get(stale)
+        : db.prepare(`SELECT a.* FROM report_audio a JOIN reports r ON r.id=a.report_id WHERE r.project_id IN (${projectParams}) AND (a.state='pending' OR (a.state='processing' AND a.started_at<?)) ORDER BY a.rowid LIMIT 1`).get(...projectIds,stale));
       if (!row) return;
       const table = draft ? 'transcription_drafts' : 'report_audio';
       const key = draft ? 'id' : 'report_id';
@@ -113,6 +121,7 @@ export function audioStore(db, config = {}) {
   return {
     metadata, draftFor, cleanup,
     createDraft(project, owner, recording) {
+      if (!allowedProject(project)) {const error = new Error('Голосовой ввод отключён для проекта'); error.status = 403; throw error;}
       cleanup();
       if (db.prepare('SELECT count(*) AS n FROM transcription_drafts WHERE project_id=?').get(project).n >= 8) {
         const error = new Error('Очередь распознавания заполнена. Повторите позже'); error.status = 429; throw error;
@@ -128,14 +137,14 @@ export function audioStore(db, config = {}) {
       db.prepare('DELETE FROM transcription_drafts WHERE id=?').run(id);
     },
     retryDraft(id) {
-      if (!enabled) return false;
+      if (!enabled || !allowedProject(db.prepare('SELECT project_id FROM transcription_drafts WHERE id=?').get(id)?.project_id)) return false;
       return Boolean(db.prepare("UPDATE transcription_drafts SET state='pending',error='',expires_at=? WHERE id=? AND state IN ('failed','unavailable')").run(Date.now()+draftTtl,id).changes);
     },
     insert(id, audio, draft) { if (audio) db.prepare('INSERT INTO report_audio(report_id,data,mime,state,error,transcript) VALUES(?,?,?,?,?,?)')
       .run(id, audio.data, audio.mime, draft?.state || (enabled ? 'pending' : 'unavailable'), draft?.error || (enabled ? '' : 'Распознавание на сервере не настроено. Оригинал сохранён.'),draft?.transcript || ''); },
     read:id=>db.prepare('SELECT data,mime FROM report_audio WHERE report_id=?').get(id),
     retry(id) {
-      if (!enabled) return false;
+      if (!enabled || !allowedReport(id)) return false;
       return Boolean(db.prepare("UPDATE report_audio SET state='pending',error='' WHERE report_id=? AND state IN ('failed','unavailable')").run(id).changes);
     },
     pump,

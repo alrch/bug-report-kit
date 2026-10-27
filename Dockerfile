@@ -9,7 +9,7 @@ RUN npm run build
 
 FROM node:24-bookworm-slim AS base
 WORKDIR /app
-ENV NODE_ENV=production
+ENV NODE_ENV=production BUG_KIT_SPEECH_ENABLED=0
 COPY --from=build /app/dist dist
 COPY server server
 COPY shared shared

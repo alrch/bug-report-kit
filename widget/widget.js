@@ -46,7 +46,7 @@ async function compress(canvas) {
 }
 
 function init({serverUrl, projectKey, label = 'Сообщить о баге', launcherStyle = '', appVersion = '', captureFetchErrors = false, reporterAuth = false,
-  reporterName = '', reporterContact = '', getReporter = null} = {}) {
+  reporterName = '', reporterContact = '', getReporter = null, voiceEnabled = false} = {}) {
   if (!serverUrl || !projectKey) throw new Error('Нужны serverUrl и projectKey');
   const base = serverUrl.replace(/\/$/, '');
   let destroyed = false;
@@ -570,7 +570,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
         if (current()) {transcribing=false;syncForm();}
       }
     };
-    const voice = voiceInput({onChange:()=>{if (voice.busy() && speechStatus.dataset.state==='ready') showSpeechStatus();syncForm();},onReady:audio=>void recognize(audio),
+    const voice = voiceInput({enabled:voiceEnabled === true,onChange:()=>{if (voice.busy() && speechStatus.dataset.state==='ready') showSpeechStatus();syncForm();},onReady:audio=>void recognize(audio),
       onError:error=>{status.className='error';status.textContent=error.message;syncForm();},onClear:()=>{clearRecognition();status.textContent='';syncForm();}});
     retrySpeech.onclick=()=>void recognize(voice.value(),true);
     const disposeForm = () => {if (disposedForm) return; disposedForm=true;window.removeEventListener('pagehide',disposeForm);clearRecognition();voice.dispose();};
@@ -714,7 +714,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     const body = document.createElement('div');
     body.className = 'report-body';
     voice.element.append(retrySpeech);
-    body.append(previewFrame, voice.element, reportFields,
+    body.append(previewFrame, ...(voiceEnabled === true ? [voice.element] : []), reportFields,
       ...(reporterAuth ? [] : [field('Кто сообщает', reporter), ...(accountReporterId ? [] : [guestIdLabel]), field('Контакт для уточнений (необязательно)', contact)]));
     card.append(header, context, body, speechStatus, status, footer);
     backdrop.append(card);
@@ -961,6 +961,7 @@ if (script?.dataset.projectKey && !window.BugReportKit.instance) {
     reporterName: script.dataset.reporterName || '',
     reporterContact: script.dataset.reporterContact || '',
     reporterAuth: script.dataset.reporterAuth === 'true',
+    voiceEnabled: script.dataset.voiceEnabled === 'true',
     getReporter: () => window.__BUG_REPORT_KIT_REPORTER_PROVIDER__?.() || {},
   });
 }

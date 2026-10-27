@@ -179,8 +179,10 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
   db.exec('CREATE INDEX IF NOT EXISTS reports_accepted ON reports(project_id, accepted_at);');
   db.exec('CREATE INDEX IF NOT EXISTS reports_fingerprint ON reports(project_id, fingerprint);');
   const reporterAuth = createReporterAuth(db, config);
-  const audio = audioStore(db, config.transcription);
-  const reportFrom = row => ({...rowToReport(row), ...audio.metadata(row.id)});
+  const voiceEnabled = project => project?.voiceEnabled === true;
+  const audio = audioStore(db, config.transcription, {projectIds:config.projects.filter(voiceEnabled).map(project => project.id)});
+  const reportFrom = row => ({...rowToReport(row), ...audio.metadata(row.id),
+    voiceEnabled:voiceEnabled(config.projects.find(project => project.id === row.project_id))});
 
 
   const selectOne = db.prepare('SELECT * FROM reports WHERE id = ?');
@@ -295,6 +297,7 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
       if (draftRoute) {
         const project = projectFor(req.headers['x-project-key']);
         if (!project || !origin || !project.allowedOrigins?.includes(origin)) return json(res,403,{error:'Проект или адрес не разрешён'});
+        if (!voiceEnabled(project)) return json(res,403,{error:'Голосовой ввод отключён для проекта. Введите текст или используйте диктовку клавиатуры.'});
         const account = project.reporterAuth ? reporterAuth.accountForToken(project,req.headers['x-reporter-token']) : null;
         if (project.reporterAuth && !account) return json(res,401,{error:'Войдите для отправки бага'});
         const owner = account ? account.id : '';
@@ -339,6 +342,7 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
         if (++current.count > 20) return json(res, 429, {error: 'Слишком много сообщений'});
         limiter.set(rateKey, current);
         const body = await readJson(req);
+        if (!voiceEnabled(project) && (body.audio != null || body.transcriptionDraft != null)) return json(res,403,{error:'Голосовой ввод отключён для проекта. Введите текст или используйте диктовку клавиатуры.'});
         const recording = parseAudio(body.audio);
         if (typeof body.description==='string' && body.description.trim().length>4000) return json(res,400,{error:'Описание длиннее 4000 символов. Сократите текст перед отправкой.'});
         const description = safeText(body.description, 4000);
@@ -448,6 +452,7 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
           res.end(recording.data); return;
         }
         if (req.method === 'POST' && match[2] === 'transcription') {
+          if (!voiceEnabled(config.projects.find(project => project.id === row.project_id))) return json(res,403,{error:'Распознавание отключено для проекта'});
           if (!audio.retry(row.id)) return json(res, 409, {error:'Повтор недоступен или обработка уже идёт'});
           setImmediate(() => void audio.pump());
           return json(res, 202, audio.metadata(row.id));

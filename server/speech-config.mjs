@@ -1,9 +1,10 @@
 import {existsSync} from 'node:fs';
 import {isAbsolute,join} from 'node:path';
 
-// The speech image opts in. An explicit project command always wins.
+// Both the installation and at least one project must explicitly opt in.
 export function withSpeechProfile(config, {env=process.env,rootDir}={}) {
-  if (env.BUG_KIT_SPEECH_ENABLED !== '1' || config.transcription !== undefined) return config;
+  if (!config.projects?.some(project => project.voiceEnabled === true)
+      || env.BUG_KIT_SPEECH_ENABLED !== '1' || config.transcription !== undefined) return config;
   const python=env.BUG_KIT_SPEECH_PYTHON || '/opt/bug-kit/speech/bin/python';
   const model=env.BUG_KIT_SPEECH_MODEL || '/opt/bug-kit/models/small';
   const language=env.BUG_KIT_SPEECH_LANGUAGE || 'ru';

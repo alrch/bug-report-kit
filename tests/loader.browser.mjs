@@ -17,7 +17,7 @@ for (const [name, engine] of Object.entries({chromium, webkit})) {
       }
       res.setHeader('Content-Type','text/html');
       res.setHeader('Content-Security-Policy', "script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'");
-      res.end(`<!doctype html><head><meta name="app-version" content="meta-version">${req.url === '/head' ? '' : '</head><body>'}<script src="/loader.js" data-project-key="test" data-reporter-auth="true" data-reporter-name="Alice" data-reporter-contact="alice@example.test" data-capture-fetch-errors="true" data-launcher-style="compact" data-label="Report"></script>${req.url === '/head' ? '<script src="/check-ready.js"></script></head><body>' : ''}`);
+      res.end(`<!doctype html><head><meta name="app-version" content="meta-version">${req.url === '/head' ? '' : '</head><body>'}<script src="/loader.js" data-project-key="test" data-voice-enabled="${req.url === '/voice' ? 'true' : 'false'}" data-reporter-auth="true" data-reporter-name="Alice" data-reporter-contact="alice@example.test" data-capture-fetch-errors="true" data-launcher-style="compact" data-label="Report"></script>${req.url === '/head' ? '<script src="/check-ready.js"></script></head><body>' : ''}`);
     });
     await new Promise(resolve => server.listen(0,'127.0.0.1',resolve));
     t.after(() => new Promise(resolve => server.close(resolve)));
@@ -54,9 +54,9 @@ for (const [name, engine] of Object.entries({chromium, webkit})) {
     assert.equal(await page.locator('.overlay').count(),0,'early click does not open a form later');
     assert.deepEqual(await page.evaluate(()=>({same:window.originalLoader===window.BugReportKitLoader.instance,
       projectKey:received.projectKey, serverUrl:received.serverUrl, reporterAuth:received.reporterAuth,
-      reporterName:received.reporterName, reporterContact:received.reporterContact, captureFetchErrors:received.captureFetchErrors,
+      voiceEnabled:received.voiceEnabled, reporterName:received.reporterName, reporterContact:received.reporterContact, captureFetchErrors:received.captureFetchErrors,
       appVersion:received.appVersion,label:received.label, launcherStyle:received.launcherStyle, violations:window.violations})),
-    {same:true,projectKey:'test',serverUrl:origin,reporterAuth:true,reporterName:'Alice',reporterContact:'alice@example.test',captureFetchErrors:true,appVersion:'meta-version',label:'Report',launcherStyle:'compact',violations:[]});
+    {same:true,projectKey:'test',serverUrl:origin,reporterAuth:true,voiceEnabled:false,reporterName:'Alice',reporterContact:'alice@example.test',captureFetchErrors:true,appVersion:'meta-version',label:'Report',launcherStyle:'compact',violations:[]});
     // Active report state is untouched by another embed.
     await page.evaluate(()=>{window.sdk=window.BugReportKit.instance;const input=document.createElement('textarea');input.value='unfinished report';input.id='draft';document.querySelector('[data-bug-report-kit]').shadowRoot.append(input);});
     await append();
@@ -141,5 +141,8 @@ for (const [name, engine] of Object.entries({chromium, webkit})) {
     await page.goto(origin+'/head');
     await page.waitForFunction(()=>window.initialReadyResolved===true);
     assert.equal(await page.locator('[data-bug-report-kit]').count(),1,'head embed exposes a ready promise before body exists');
+    await page.goto(origin+'/voice');
+    await page.evaluate(()=>window.BugReportKitLoader.instance.ready);
+    assert.equal(await page.evaluate(()=>received.voiceEnabled),true);
   });
 }

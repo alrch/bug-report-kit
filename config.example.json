@@ -9,6 +9,7 @@
       "id": "example",
       "name": "Example project",
       "widgetKey": "replace-with-random-public-key",
+      "voiceEnabled": false,
       "reporterAuth": true,
       "panelAccess": true,
       "allowedOrigins": ["http://localhost:7338"],

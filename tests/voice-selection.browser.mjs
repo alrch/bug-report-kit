@@ -10,10 +10,10 @@ import {createApp} from '../server/app.mjs';
 test('editable frame and real browser audio survive failed submit and preserve separate attachment', async t=>{
   const directory=mkdtempSync(join(tmpdir(),'kit-voice-browser-'));
   let kitBase;
-  const site=createServer((req,res)=>{res.setHeader('Content-Type','text/html');res.end(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><body style="margin:0;background:#f0f4fa"><h1>TEST: голос и рамка</h1><p>Проверка синтетических данных</p><script src="${kitBase}/widget.js" data-server-url="${kitBase}" data-project-key="fixture"></script>`);});
+  const site=createServer((req,res)=>{res.setHeader('Content-Type','text/html');res.end(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><body style="margin:0;background:#f0f4fa"><h1>TEST: голос и рамка</h1><p>Проверка синтетических данных</p><script src="${kitBase}/widget.js" data-server-url="${kitBase}" data-project-key="fixture" data-voice-enabled="true"></script>`);});
   await new Promise(r=>site.listen(0,'127.0.0.1',r));
   const origin=`http://127.0.0.1:${site.address().port}`;
-  const app=createApp({projects:[{id:'test',widgetKey:'fixture',allowedOrigins:[origin]}],teamTokens:[{token:'fixture-developer',role:'developer',projects:['test']}]},{rootDir:process.cwd(),database:join(directory,'reports.sqlite')});
+  const app=createApp({projects:[{id:'test',voiceEnabled:true,widgetKey:'fixture',allowedOrigins:[origin]}],teamTokens:[{token:'fixture-developer',role:'developer',projects:['test']}]},{rootDir:process.cwd(),database:join(directory,'reports.sqlite')});
   await new Promise(r=>app.server.listen(0,'127.0.0.1',r));kitBase=`http://127.0.0.1:${app.server.address().port}`;
   const browser=await chromium.launch({headless:true,args:['--use-fake-ui-for-media-stream','--use-fake-device-for-media-stream']});
   t.after(async()=>{await browser.close();await new Promise(r=>site.close(r));await new Promise(r=>app.server.close(r));app.db.close();rmSync(directory,{recursive:true,force:true});});
