@@ -1,0 +1,210 @@
+name: Speech image release asset
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/speech-image-release.yml'
+      - '.github/scripts/smoke-image.mjs'
+      - 'Dockerfile'
+      - 'scripts/**'
+      - 'server/**'
+      - 'shared/**'
+      - 'widget/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tests/**'
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact 40-character source commit SHA to build
+        required: true
+        type: string
+        default: '7ba0e4a68c30eb541f9a2ddec748064842c0fc5f'
+      release_tag:
+        description: Existing immutable-version release to receive the assets
+        required: true
+        type: string
+        default: 'v0.4.0'
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check native runner architecture
+        run: test "$(uname -m)" = x86_64
+      - name: Checkout workflow harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: harness
+          persist-credentials: false
+      - name: Select and checkout exact source SHA
+        id: source
+        env:
+          INPUT_SHA: ${{ inputs.source_sha }}
+          EVENT_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            source_sha="$INPUT_SHA"
+          else
+            source_sha="$EVENT_SHA"
+          fi
+          [[ "$source_sha" =~ ^[0-9a-fA-F]{40}$ ]]
+          source_sha="${source_sha,,}"
+          echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
+      - name: Checkout source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ steps.source.outputs.sha }}
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify checked out source SHA
+        working-directory: source
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: source/package-lock.json
+      - name: Install and test source
+        working-directory: source
+        run: npm ci && npm test && npm run build
+      - name: Install synthetic speech generator
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends espeak-ng
+      - name: Generate synthetic Russian test audio
+        run: espeak-ng -v ru -s 120 -w "$RUNNER_TEMP/synthetic-ru.wav" 'Проверка распознавания речи в тестовом контейнере.'
+      - name: Verify pinned public model revision
+        working-directory: source
+        run: rg -F '536b0662742c02347bc0e980a01041f333bce120' scripts/prepare-speech-model.py
+      - name: Build native linux/amd64 speech and runtime images
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          docker buildx build --platform linux/amd64 --load --target speech -t "bug-report-kit:ci-speech-$SOURCE_SHA" source
+          docker buildx build --platform linux/amd64 --load --target runtime -t "bug-report-kit:ci-runtime-$SOURCE_SHA" source
+          test "$(docker image inspect "bug-report-kit:ci-speech-$SOURCE_SHA" --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
+          test "$(docker image inspect "bug-report-kit:ci-runtime-$SOURCE_SHA" --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
+      - name: Test isolated speech and lightweight runtime images
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/ci-config.json" <<'JSON'
+          {"port":7337,"host":"0.0.0.0","database":"/app/data/reports.sqlite","projects":[{"id":"ci","widgetKey":"ci-public-key","reporterAuth":false,"panelAccess":false,"allowedOrigins":["http://localhost:7337"]}],"teamTokens":[{"name":"synthetic-ci","role":"developer","token":"synthetic-ci-only-token","projects":["ci"]}]}
+          JSON
+          run_image() {
+            local target="$1" image="bug-report-kit:ci-$1-$SOURCE_SHA" name="kit-ci-$1-$SOURCE_SHA"
+            docker run --detach --name "$name" --network none --memory=1g --memory-swap=3g --cpus=1 \
+              --tmpfs /app/data:rw,noexec,nosuid,size=64m,uid=1000,gid=1000 \
+              --volume "$RUNNER_TEMP/ci-config.json:/tmp/config.json:ro" \
+              --volume "$RUNNER_TEMP/synthetic-ru.wav:/tmp/synthetic-ru.wav:ro" \
+              --volume "$GITHUB_WORKSPACE/harness/.github/scripts/smoke-image.mjs:/tmp/smoke-image.mjs:ro" \
+              --env BUG_KIT_CONFIG=/tmp/config.json "$image" >/dev/null
+            local ready=0
+            for _ in $(seq 1 30); do
+              if docker exec "$name" node -e "fetch('http://127.0.0.1:7337/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; then ready=1; break; fi
+              sleep 2
+            done
+            test "$ready" = 1
+            docker exec "$name" node /tmp/smoke-image.mjs "$target" /tmp/synthetic-ru.wav
+            docker rm --force "$name" >/dev/null
+          }
+          trap 'docker rm --force "kit-ci-speech-$SOURCE_SHA" "kit-ci-runtime-$SOURCE_SHA" >/dev/null 2>&1 || true' EXIT
+          run_image speech
+          run_image runtime
+      - name: Package speech image and release manifest
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/release-assets"
+          archive="$RUNNER_TEMP/release-assets/bug-report-kit-speech-linux-amd64-$SOURCE_SHA.tar"
+          docker save "bug-report-kit:ci-speech-$SOURCE_SHA" -o "$archive"
+          archive_sha="$(sha256sum "$archive" | cut -d' ' -f1)"
+          image_id="$(docker image inspect "bug-report-kit:ci-speech-$SOURCE_SHA" --format '{{.Id}}')"
+          node - "$archive" "$archive_sha" "$image_id" "$SOURCE_SHA" "$RUNNER_TEMP/release-assets" <<'NODE'
+          import {writeFileSync, statSync} from 'node:fs';
+          const [archive, archiveSha256, imageId, sourceSha, outDir] = process.argv.slice(2);
+          const manifest = {
+            artifact: 'Bug Report Kit generic speech image',
+            platform: 'linux/amd64',
+            sourceSha,
+            model: {repository: 'Systran/faster-whisper-small', revision: '536b0662742c02347bc0e980a01041f333bce120'},
+            imageId,
+            archive: archive.split('/').at(-1),
+            archiveSizeBytes: statSync(archive).size,
+            archiveSha256,
+          };
+          writeFileSync(`${outDir}/bug-report-kit-speech-linux-amd64-${sourceSha}.manifest.json`, `${JSON.stringify(manifest, null, 2)}\n`, {mode: 0o644});
+          NODE
+      - name: Upload verified build artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: speech-image-${{ steps.source.outputs.sha }}
+          path: ${{ runner.temp }}/release-assets/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-release-assets:
+    if: github.event_name == 'workflow_dispatch'
+    needs: build-test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified build artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: speech-image-${{ needs.build-test.outputs.source_sha }}
+          path: release-assets
+      - name: Validate exact source tag and publish without clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE_SHA: ${{ needs.build-test.outputs.source_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          SOURCE_SHA="${SOURCE_SHA,,}"
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          gh release view "$RELEASE_TAG" --json tagName,isDraft,isPrerelease,assets > "$RUNNER_TEMP/release.json"
+          tag_sha="$(gh api "repos/$GH_REPO/commits/$RELEASE_TAG" --jq .sha)"
+          test "$tag_sha" = "$SOURCE_SHA"
+          node - "$RUNNER_TEMP/release.json" "$RELEASE_TAG" "$SOURCE_SHA" <<'NODE'
+          import {readFileSync} from 'node:fs';
+          const [path, expectedTag, sourceSha] = process.argv.slice(2);
+          const release = JSON.parse(readFileSync(path, 'utf8'));
+          if (release.tagName !== expectedTag || release.isDraft || release.isPrerelease) throw new Error('target must be an existing published stable release');
+          if (release.assets.some(asset => asset.name.includes(sourceSha) && asset.name.startsWith('bug-report-kit-speech-linux-amd64-'))) throw new Error('release asset for this source SHA already exists');
+          NODE
+          archive="release-assets/bug-report-kit-speech-linux-amd64-$SOURCE_SHA.tar"
+          manifest="release-assets/bug-report-kit-speech-linux-amd64-$SOURCE_SHA.manifest.json"
+          test -s "$archive" && test -s "$manifest"
+          node - "$manifest" "$archive" "$SOURCE_SHA" <<'NODE'
+          import {readFileSync, statSync} from 'node:fs';
+          import {createHash} from 'node:crypto';
+          const [manifestPath, archivePath, sourceSha] = process.argv.slice(2);
+          const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+          const digest = createHash('sha256').update(readFileSync(archivePath)).digest('hex');
+          if (manifest.sourceSha !== sourceSha || manifest.platform !== 'linux/amd64' || !/^sha256:[a-f0-9]{64}$/.test(manifest.imageId)
+            || manifest.archiveSha256 !== digest || manifest.archiveSizeBytes !== statSync(archivePath).size
+            || manifest.model?.repository !== 'Systran/faster-whisper-small'
+            || manifest.model?.revision !== '536b0662742c02347bc0e980a01041f333bce120') throw new Error('asset manifest validation failed');
+          NODE
+          gh release upload "$RELEASE_TAG" "$archive" "$manifest"

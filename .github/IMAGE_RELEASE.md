@@ -1,0 +1,9 @@
+# Generic speech image release asset
+
+The `Speech image release asset` workflow builds the repository source commit selected by an exact 40-character SHA on native `linux/amd64`. Its isolated smoke test uses only generated Russian speech, has no network inside either test container, and runs speech inference with a 1 GiB RAM limit, a 3 GiB combined RAM-plus-swap limit (therefore up to 2 GiB swap), and one CPU. It also builds and checks the default lightweight `runtime` target.
+
+A `workflow_dispatch` run packages the tested `speech` image as a Docker archive and a JSON manifest containing the source SHA, image ID, platform, archive size/hash, and pinned public model revision. The publish job has repository-scoped `contents:write`; all build and test steps have `contents:read`. It requires an existing stable release whose tag matches the requested source commit, rejects an existing matching asset, and calls `gh release upload` without `--clobber`.
+
+The release asset is generic software. It contains no project configuration, project credentials, or user audio. The Python environment and model are baked during image build; runtime inference is offline.
+
+Primary references: [GitHub workflow syntax](https://docs.github.com/actions/using-workflows/workflow-syntax-for-github-actions), [GitHub token permissions](https://docs.github.com/actions/security-for-github-actions/security-guides/automatic-token-authentication), [secure use](https://docs.github.com/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions), [Docker resource constraints](https://docs.docker.com/engine/containers/resource_constraints/), [Docker image save](https://docs.docker.com/reference/cli/docker/image/save/), and [GitHub CLI release upload](https://cli.github.com/manual/gh_release_upload).
