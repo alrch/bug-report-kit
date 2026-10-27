@@ -12,7 +12,6 @@ const execFileAsync = promisify(execFile);
 
 test('reporter creates a report; team reads, updates, and views HTML', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'bug-kit-test-'));
-  t.after(() => rmSync(directory, {recursive: true, force: true}));
   const config = {
     projects: [{id: 'site', name: 'Site', widgetKey: 'public-widget-key',
       allowedOrigins: ['http://localhost:7338']}],
@@ -26,6 +25,7 @@ test('reporter creates a report; team reads, updates, and views HTML', async (t)
   t.after(async () => {
     await new Promise((resolve) => app.server.close(resolve));
     app.db.close();
+    rmSync(directory, {recursive: true, force: true});
   });
   const base = `http://127.0.0.1:${app.server.address().port}`;
   assert.deepEqual(await (await fetch(`${base}/healthz`)).json(), {ok: true});
@@ -177,7 +177,6 @@ test('reporter creates a report; team reads, updates, and views HTML', async (t)
 
 test('existing version 0.1 database is migrated without losing reports', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'bug-kit-test-'));
-  t.after(() => rmSync(directory, {recursive: true, force: true}));
   const path = join(directory, 'reports.sqlite');
   const old = new DatabaseSync(path);
   old.exec(`CREATE TABLE reports (
@@ -199,7 +198,7 @@ test('existing version 0.1 database is migrated without losing reports', async (
       {name: 'Developer', role: 'developer', token: 'developer', projects: ['site']}]},
   {rootDir: directory, database: './reports.sqlite'});
   await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
-  t.after(async () => {await new Promise((resolve) => app.server.close(resolve)); app.db.close();});
+  t.after(async () => {await new Promise((resolve) => app.server.close(resolve)); app.db.close(); rmSync(directory, {recursive: true, force: true});});
   const base = `http://127.0.0.1:${app.server.address().port}`;
   const response = await fetch(`${base}/api/reports/legacy`, {headers: {Authorization: 'Bearer reviewer'}});
   assert.equal(response.status, 200);
@@ -222,7 +221,6 @@ test('existing version 0.1 database is migrated without losing reports', async (
 
 test('status filtering happens before pagination', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'bug-kit-test-'));
-  t.after(() => rmSync(directory, {recursive: true, force: true}));
   const app = createApp({
     projects: [{id: 'site', name: 'Site', widgetKey: 'public-widget-key',
       allowedOrigins: ['http://localhost:7338']}],
@@ -232,6 +230,7 @@ test('status filtering happens before pagination', async (t) => {
   t.after(async () => {
     await new Promise((resolve) => app.server.close(resolve));
     app.db.close();
+    rmSync(directory, {recursive: true, force: true});
   });
   const base = `http://127.0.0.1:${app.server.address().port}`;
   const created = await fetch(`${base}/api/reports`, {
@@ -257,7 +256,6 @@ test('status filtering happens before pagination', async (t) => {
 
 test('origin and project access are enforced', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'bug-kit-test-'));
-  t.after(() => rmSync(directory, {recursive: true, force: true}));
   const app = createApp({
     projects: [{id: 'site', name: 'Site', widgetKey: 'public-widget-key',
       allowedOrigins: ['http://localhost:7338']}],
@@ -267,6 +265,7 @@ test('origin and project access are enforced', async (t) => {
   t.after(async () => {
     await new Promise((resolve) => app.server.close(resolve));
     app.db.close();
+    rmSync(directory, {recursive: true, force: true});
   });
   const base = `http://127.0.0.1:${app.server.address().port}`;
   const rejected = await fetch(`${base}/api/reports`, {
