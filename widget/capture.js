@@ -1,3 +1,4 @@
+import {layoutViewport} from './viewport.js';
 import html2canvas from 'html2canvas';
 
 import {preserveCaptureControls} from './capture-controls.js';
@@ -8,7 +9,7 @@ export const safePageUrl = (href = window.location.href) => sanitizeReportUrl(hr
 
 // Snapshot drawing buffers during a render frame, before WebGL's default
 // preserveDrawingBuffer=false buffer is discarded by browser compositing.
-function canvasFrames(canvases) {
+function canvasFrames(canvases, {width,height}) {
   return new Promise(resolve => {
     let finished = false;
     const take = () => {
@@ -17,7 +18,7 @@ function canvasFrames(canvases) {
       resolve(canvases.map(canvas => {
         const rect = canvas.getBoundingClientRect();
         if (!canvas.width || !canvas.height || !rect.width || !rect.height
-          || rect.right <= 0 || rect.bottom <= 0 || rect.left >= innerWidth || rect.top >= innerHeight) return null;
+          || rect.right <= 0 || rect.bottom <= 0 || rect.left >= width || rect.top >= height) return null;
         canvas.dispatchEvent(new Event('bug-report-kit:before-canvas-capture'));
         try {
           const frame = document.createElement('canvas');
@@ -35,16 +36,24 @@ function canvasFrames(canvases) {
 }
 
 export function captureViewport() {
+  const bounds = layoutViewport();
   const canvases = [...document.querySelectorAll('canvas')];
-  const frames = canvasFrames(canvases);
+  const frames = canvasFrames(canvases, bounds);
   // html2canvas synchronously clones the DOM before its first async image wait.
   // Keep this call before awaiting buffers so menus survive outside-clicks.
-  const width = innerWidth, height = innerHeight;
+  const {width,height} = bounds;
+  const originX = scrollX, originY = scrollY;
+  // Pinch zoom magnifies the bitmap as well as the live page. Render enough
+  // pixels for the current physical display density, with a bounded allocation
+  // for very large viewports or extreme zoom (16M pixels, at most8192 per edge).
+  const density = Math.max(1, devicePixelRatio || 1) * Math.max(1, window.visualViewport?.scale || 1);
+  const scale = Math.min(density, Math.sqrt(16000000 / (width * height)), 8192 / width, 8192 / height);
   return html2canvas(document.body, {
-    scale: Math.min(2, Math.max(1, devicePixelRatio || 1)),
-    x: scrollX + (window.visualViewport?.offsetLeft || 0),
-    y: scrollY + (window.visualViewport?.offsetTop || 0),
-    width, height,
+    scale,
+    // The frozen canvas and pointer.clientX/Y use layout-viewport coordinates.
+    // Pinch pan is applied by the browser to both; adding it here applies it twice.
+    x: originX, y: originY,
+    width, height, windowWidth:width, windowHeight:height,
     useCORS: true, imageTimeout: 3000, logging: false, backgroundColor: '#fff',
     ignoreElements: element => element.hasAttribute('data-bug-report-kit')
       || (element instanceof HTMLImageElement && (!element.complete || element.naturalWidth === 0)),
@@ -74,6 +83,8 @@ export function captureViewport() {
   }).then(canvas => {
     canvas.dataset.captureCssWidth = String(width);
     canvas.dataset.captureCssHeight = String(height);
+    canvas.dataset.captureScrollX = String(originX);
+    canvas.dataset.captureScrollY = String(originY);
     return canvas;
   });
 }

@@ -46,6 +46,10 @@ async function main() {
     await writeFile(args[1], Buffer.from(await response.arrayBuffer()), {flag: 'wx'});
     console.log(args[1]);
     return;
+  } else if (command === 'audio' && args.length === 2) {
+    response = await request(`/api/reports/${id(args[0])}/audio`);
+    await writeFile(args[1], Buffer.from(await response.arrayBuffer()), {flag:'wx',mode:0o600});
+    console.log(args[1]); return;
   } else if (command === 'attachment' && args.length === 2) {
     response = await request(`/api/reports/${id(args[0])}/attachment`);
     await writeFile(args[1], Buffer.from(await response.arrayBuffer()), {flag: 'wx'});
@@ -60,7 +64,7 @@ async function main() {
       method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
     });
   } else {
-    throw new Error('Команды: me | projects | list [status] | show ID | screenshot ID FILE | attachment ID FILE | action ID JSON_FILE | summary FROM TO [groupBy]');
+    throw new Error('Команды: me | projects | list [status] | show ID | screenshot ID FILE | attachment ID FILE | audio ID FILE | action ID JSON_FILE | summary FROM TO [groupBy]');
   }
   console.log(JSON.stringify(await response.json(), null, 2));
 }

@@ -1,3 +1,4 @@
+import {audioStore, parseAudio} from './audio.mjs';
 import {sanitizeReportUrl} from '../shared/report-url.mjs';
 import {createServer} from 'node:http';
 import {readFileSync, existsSync, mkdirSync} from 'node:fs';
@@ -10,7 +11,7 @@ import {getPeriodSummary, summaryHtml} from './summary.mjs';
 import {createReporterAuth} from './reporter-auth.mjs';
 
 const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);
-const MAX_BODY = 11 * 1024 * 1024;
+const MAX_BODY = 18 * 1024 * 1024;
 const MAX_IMAGE = 2 * 1024 * 1024;
 const MAX_ATTACHMENT = 5 * 1024 * 1024;
 const limiter = new Map();
@@ -178,6 +179,9 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
   db.exec('CREATE INDEX IF NOT EXISTS reports_accepted ON reports(project_id, accepted_at);');
   db.exec('CREATE INDEX IF NOT EXISTS reports_fingerprint ON reports(project_id, fingerprint);');
   const reporterAuth = createReporterAuth(db, config);
+  const audio = audioStore(db, config.transcription);
+  const reportFrom = row => ({...rowToReport(row), ...audio.metadata(row.id)});
+
 
   const selectOne = db.prepare('SELECT * FROM reports WHERE id = ?');
   const insert = db.prepare(`INSERT INTO reports
@@ -216,7 +220,7 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
     if (origin && allowedOrigin(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Project-Key, X-Reporter-Token, Authorization, X-Request-Id');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Project-Key, X-Reporter-Token, X-Draft-Token, Authorization, X-Request-Id');
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
     }
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
@@ -226,8 +230,10 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
         db.prepare('SELECT 1 AS ok').get();
         return json(res, 200, {ok: true});
       }
-      if (req.method === 'GET' && url.pathname === '/widget.js') {
-        const path = resolve(rootDir, 'dist/widget.js');
+      if (req.method === 'GET' && ['/widget.js', '/loader.js', '/loading-ui.mjs'].includes(url.pathname)) {
+        const path = url.pathname === '/loading-ui.mjs'
+          ? resolve(import.meta.dirname, '../widget/loading-ui.js')
+          : resolve(rootDir, 'dist', url.pathname.slice(1));
         if (!existsSync(path)) return json(res, 503, {error: 'Сначала выполните npm run build'});
         res.writeHead(200, {'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store'});
         res.end(readFileSync(path));
@@ -285,6 +291,42 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
         }
         return json(res, 405, {error: 'Метод не поддерживается'});
       }
+      const draftRoute = /^\/api\/transcription-drafts(?:\/([a-zA-Z0-9-]+)(?:\/(retry|cancel|status))?)?$/.exec(url.pathname);
+      if (draftRoute) {
+        const project = projectFor(req.headers['x-project-key']);
+        if (!project || !origin || !project.allowedOrigins?.includes(origin)) return json(res,403,{error:'Проект или адрес не разрешён'});
+        const account = project.reporterAuth ? reporterAuth.accountForToken(project,req.headers['x-reporter-token']) : null;
+        if (project.reporterAuth && !account) return json(res,401,{error:'Войдите для отправки бага'});
+        const owner = account ? account.id : '';
+        const limited = () => {
+          const key = `speech:${project.id}:${clientIpFor(req)}`;
+          const current = limiter.get(key) || {count:0,until:Date.now()+60000};
+          if (Date.now()>current.until) {current.count=0;current.until=Date.now()+60000;}
+          current.count++; limiter.set(key,current); return current.count>6;
+        };
+        if (!draftRoute[1] && req.method==='POST') {
+          if (limited()) return json(res,429,{error:'Слишком много попыток распознавания. Повторите позже'});
+          const body = await readJson(req);
+          let page; try {page=new URL(body.pageUrl);} catch {return json(res,400,{error:'Некорректный адрес страницы'});}
+          if (!['http:','https:'].includes(page.protocol) || page.origin!==origin) return json(res,400,{error:'Адрес страницы не совпадает с источником'});
+          const recording = parseAudio(body.audio);
+          if (!recording) return json(res,400,{error:'Запишите голос'});
+          const credentials=audio.createDraft(project.id,owner,recording);
+          const row=audio.draftFor(credentials.id,credentials.draftToken,project.id,owner);
+          setImmediate(()=>void audio.pump());
+          return json(res,202,{...audio.draftMetadata(row),...credentials});
+        }
+        const row=audio.draftFor(draftRoute[1],req.headers['x-draft-token'],project.id,owner);
+        if (!row) return json(res,404,{error:'Черновик не найден или срок хранения истёк'});
+        if ((req.method==='GET' && !draftRoute[2]) || (req.method==='POST' && draftRoute[2]==='status')) return json(res,200,audio.draftMetadata(row));
+        if (req.method==='POST' && draftRoute[2]==='cancel') {audio.cancelDraft(row.id);return json(res,200,{ok:true});}
+        if (req.method==='POST' && draftRoute[2]==='retry') {
+          if (limited()) return json(res,429,{error:'Слишком много попыток распознавания. Повторите позже'});
+          if (!audio.retryDraft(row.id)) return json(res,409,{error:row.error || 'Повтор пока недоступен'});
+          setImmediate(()=>void audio.pump()); return json(res,202,{state:'pending'});
+        }
+        return json(res,405,{error:'Метод не разрешён'});
+      }
       if (req.method === 'POST' && url.pathname === '/api/reports') {
         const project = projectFor(req.headers['x-project-key']);
         if (!project || !origin || !project.allowedOrigins?.includes(origin)) return json(res, 403, {error: 'Проект или адрес не разрешён'});
@@ -297,9 +339,21 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
         if (++current.count > 20) return json(res, 429, {error: 'Слишком много сообщений'});
         limiter.set(rateKey, current);
         const body = await readJson(req);
+        const recording = parseAudio(body.audio);
+        if (typeof body.description==='string' && body.description.trim().length>4000) return json(res,400,{error:'Описание длиннее 4000 символов. Сократите текст перед отправкой.'});
         const description = safeText(body.description, 4000);
-        if (!description) return json(res, 400, {error: 'Опишите проблему'});
-        const title = safeText(body.title, 160) || description.split('\n')[0].slice(0, 160);
+        let draft;
+        if (body.transcriptionDraft) {
+          const owner=account ? account.id : '';
+          draft=audio.draftFor(body.transcriptionDraft.id,body.transcriptionDraft.token,project.id,owner);
+          if (!draft) return json(res,404,{error:'Черновик распознавания истёк. Повторите распознавание или удалите запись.'});
+          if (!recording || draft.mime!==recording.mime || !Buffer.from(draft.data).equals(recording.data)) return json(res,400,{error:'Запись не совпадает с черновиком'});
+          // A polling/network error may leave a worker running while the author
+          // chooses manual text. Preserve bytes without queueing another ASR job.
+          if (['pending','processing'].includes(draft.state)) draft={...draft,state:'failed',transcript:'',error:'Распознавание прервано при отправке. Можно повторить в карточке.'};
+        }
+        if (!description && !recording) return json(res, 400, {error: 'Опишите проблему'});
+        const title = safeText(body.title, 160) || description.split('\n')[0].slice(0, 160) || 'Голосовое описание бага';
         const steps = safeText(body.steps, 2000);
         const expected = safeText(body.expected, 2000);
         const actual = safeText(body.actual, 2000);
@@ -321,12 +375,19 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
         const now = new Date().toISOString();
         const id = randomUUID();
         const history = [{at: now, actor: 'reporter', action: 'create', status: 'new', note: 'Создано'}];
+        db.exec('BEGIN');
+        try {
         insert.run(id, project.id, now, now, 0, 'new', title, description, steps, expected, actual,
           page.toString(), origin, userAgent, environmentFrom(page), appVersion,
           JSON.stringify(viewport), JSON.stringify(selection), screenshot?.data || null,
           screenshot?.mime || null, attachment?.data || null, attachment?.name || '', attachment?.mime || '',
           fingerprintFor(project.id, page, title),
           JSON.stringify(diagnostics), JSON.stringify(history), reporterName, reporterContact, reporterId);
+        audio.insert(id, recording, draft);
+        if (draft) audio.cancelDraft(draft.id);
+        db.exec('COMMIT');
+        } catch (error) { db.exec('ROLLBACK'); throw error; }
+        setImmediate(() => void audio.pump());
         return json(res, 201, {id, status: 'new', reportUrl: `/reports/${id}`});
       }
 
@@ -373,13 +434,24 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
             COALESCE(length(attachment),0) AS attachment_size
             FROM reports WHERE ${clauses.join(' AND ')}
             ORDER BY created_at DESC, rowid DESC LIMIT 100 OFFSET ?`).all(...params, Number(offsetRaw));
-          return json(res, 200, rows.map(rowToReport));
+          return json(res, 200, rows.map(reportFrom));
         }
-        const match = /^\/api\/reports\/([^/]+)(?:\/(screenshot|attachment|html|related))?$/.exec(url.pathname);
+        const match = /^\/api\/reports\/([^/]+)(?:\/(screenshot|attachment|audio|transcription|html|related))?$/.exec(url.pathname);
         if (!match) return json(res, 404, {error: 'Не найдено'});
         const row = selectOne.get(match[1]);
         if (!row) return json(res, 404, {error: 'Баг не найден'});
         if (!canSee(actor, row.project_id)) return json(res, 403, {error: 'Нет доступа к проекту'});
+        if (req.method === 'GET' && match[2] === 'audio') {
+          const recording = audio.read(row.id);
+          if (!recording) return json(res, 404, {error:'Запись не найдена'});
+          res.writeHead(200, {'Content-Type':recording.mime, 'Cache-Control':'no-store', 'X-Content-Type-Options':'nosniff'});
+          res.end(recording.data); return;
+        }
+        if (req.method === 'POST' && match[2] === 'transcription') {
+          if (!audio.retry(row.id)) return json(res, 409, {error:'Повтор недоступен или обработка уже идёт'});
+          setImmediate(() => void audio.pump());
+          return json(res, 202, audio.metadata(row.id));
+        }
         if (req.method === 'GET' && match[2] === 'related') {
           if (!row.fingerprint) return json(res, 200, []);
           const related = db.prepare(`SELECT id,title,status,environment,created_at AS createdAt
@@ -403,7 +475,7 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
           return;
         }
         if (req.method === 'GET' && match[2] === 'html') {
-          const report = rowToReport(row);
+          const report = reportFrom(row);
           const shot = row.screenshot ? `<img alt="Снимок" style="max-width:100%" src="data:${row.screenshot_mime};base64,${row.screenshot.toString('base64')}">` : '<p>Снимка нет</p>';
           const attached = row.attachment ? `<p><a download="${escapeHtml(row.attachment_name)}" href="data:application/octet-stream;base64,${row.attachment.toString('base64')}">${escapeHtml(row.attachment_name)}</a> (${row.attachment.length} байт)</p>` : '<p>Файла нет</p>';
           const project = config.projects.find((item) => item.id === row.project_id);
@@ -424,6 +496,8 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
           ${htmlText('Суть бага', row.description)}${htmlText('Что ожидалось', report.expected)}
           ${row.screenshot ? `<section><h2>Снимок</h2>${shot}</section>` : ''}
           ${row.attachment ? `<section><h2>Приложенный файл</h2>${attached}</section>` : ''}
+          ${audio.read(row.id) ? `<section><h2>Голосовое описание</h2><audio controls src="data:${audio.read(row.id).mime};base64,${audio.read(row.id).data.toString('base64')}"></audio></section>` : ''}
+          ${htmlText('Расшифровка (автоматическая)', report.transcription?.text || report.transcription?.error)}
           ${htmlText('Что исправлено', row.resolution)}${htmlText('Результат проверки', report.verificationNote)}
           <details><summary>История изменений</summary><ol>${history}</ol></details>
           <details><summary>Технические сведения</summary><p class="meta">ID: ${escapeHtml(row.id)} · Проект: ${escapeHtml(row.project_id)} · Версия: ${escapeHtml(row.app_version || 'не указана')}</p>
@@ -434,12 +508,12 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
             ${htmlText('Код и проверки', Object.keys(report.fixEvidence).length ? JSON.stringify(report.fixEvidence, null, 2) : '')}
             ${repositories.length ? htmlText('Репозитории', repositories.map((item) => `${item.name}: ${item.url}`).join('\n')) : ''}
           </details></main></html>`;
-          res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'none'; img-src data:; style-src 'unsafe-inline'"});
+          res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'none'; img-src data:; media-src data:; style-src 'unsafe-inline'"});
           res.end(html);
           return;
         }
         if (req.method === 'GET' && !match[2]) return json(res, 200, {
-          ...rowToReport(row), repositories: config.projects.find((item) => item.id === row.project_id)?.repositories || [],
+          ...reportFrom(row), repositories: config.projects.find((item) => item.id === row.project_id)?.repositories || [],
         });
         if (req.method === 'PATCH' && !match[2]) {
           const body = await readJson(req);
@@ -457,7 +531,7 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
             JSON.stringify(next.fixEvidence), next.verificationNote, next.acceptedAt,
             next.duplicateOf, JSON.stringify(next.history), row.id, row.revision);
           if (!result.changes) return json(res, 409, {error: 'Карточка уже изменилась'});
-          return json(res, 200, rowToReport(selectOne.get(row.id)));
+          return json(res, 200, reportFrom(selectOne.get(row.id)));
         }
         return json(res, 405, {error: 'Метод не поддерживается'});
       }
@@ -477,5 +551,6 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
       json(res, error.status || 400, {error: error.message || 'Ошибка'});
     }
   });
-  return {server, db, close: () => {server.close(); db.close();}};
+  server.once('close', () => audio.close());
+  return {server, db, audio, close: () => {server.close(); db.close();}};
 }

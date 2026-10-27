@@ -2,6 +2,8 @@ const $ = (selector) => document.querySelector(selector);
 let token = sessionStorage.getItem('bug-kit-panel-token') || '';
 let selected = null;
 let imageUrl = '';
+let audioUrl = '';
+let showing = 0;
 let offset = 0;
 let actor = null;
 let projectNames = new Map();
@@ -124,7 +126,11 @@ function readableHistory(history = [], reporterName = '') {
 }
 
 async function showReport(id) {
-  selected = await (await api(`/api/reports/${id}`)).json();
+  const generation = ++showing;
+  const report = await (await api(`/api/reports/${id}`)).json();
+  if (generation !== showing) return;
+  selected = report;
+  if (audioUrl) URL.revokeObjectURL(audioUrl); audioUrl = '';
   const detail = $('#detail');
   detail.replaceChildren();
   const heading = document.createElement('h2');
@@ -177,6 +183,29 @@ async function showReport(id) {
     };
     attachment.append(name, download);
     detail.append(attachment);
+  }
+  if (selected.audioAvailable) {
+    const voice = document.createElement('section');
+    const heading = document.createElement('h3'); heading.textContent = 'Голосовое описание';
+    const play = document.createElement('button'); play.textContent = 'Загрузить запись';
+    const player = document.createElement('audio'); player.controls = true; player.hidden = true;
+    play.onclick = async () => {
+      play.disabled = true;
+      try {
+        const blob = await (await api(`/api/reports/${id}/audio`)).blob();
+        if (generation !== showing) return;
+        audioUrl = URL.createObjectURL(blob); player.src = audioUrl; player.hidden = false; play.hidden = true;
+      } catch (error) {message(error.message, true); play.disabled = false;}
+    };
+    voice.append(heading,play,player); detail.append(voice);
+    const transcription = selected.transcription || {};
+    const labels = {pending:'В очереди распознавания',processing:'Распознаём запись на сервере',ready:'',failed:'Не удалось распознать',unavailable:'Распознавание не настроено'};
+    textBlock(voice, 'Расшифровка (автоматическая)', transcription.text || transcription.error || labels[transcription.state]);
+    if (['failed','unavailable'].includes(transcription.state)) actionButton(voice, 'Повторить распознавание', async () => {
+      try {await api(`/api/reports/${id}/transcription`, {method:'POST'}); await showReport(id);}
+      catch (error) {message(error.message, true);}
+    });
+    if (['pending','processing'].includes(transcription.state)) actionButton(voice, 'Обновить расшифровку', () => showReport(id));
   }
   textBlock(detail, 'Что исправлено', selected.resolution);
   textBlock(detail, 'Результат проверки', selected.verificationNote);

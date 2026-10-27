@@ -11,3 +11,7 @@ await build({
   target:['es2022'],
   legalComments:'linked',
 });
+
+// Self-contained early feedback, without capture/html2canvas in the dependency graph.
+await build({entryPoints:['widget/loader.js'], outfile:'dist/loader.js', bundle:true,
+  minify:true, format:'iife', target:['es2022'], legalComments:'none'});
