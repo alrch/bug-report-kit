@@ -67,6 +67,8 @@ export function createReporterAuth(db, config) {
     return byToken.get(tokenHash(token), project.id, Date.now()) || null;
   };
   const register = async (project, body, ip) => {
+    if (project.reporterRegistration === false) return {status: 403, code: 'registration_closed',
+      error: 'Самостоятельная регистрация закрыта. Войдите с выданными именем и PIN или обратитесь к сопровождающему проекта.'};
     if (limited(project, ip)) return {status: 429, error: 'Слишком много попыток. Повторите позже'};
     const name = normalizeName(body?.name);
     if (!validName(name)) return {status: 400, error: 'Имя: 2–80 букв, цифр, пробелов или символов _ . -'};
@@ -86,7 +88,9 @@ export function createReporterAuth(db, config) {
     const name = normalizeName(body?.name);
     if (!validName(name) || !validPin(body?.pin)) return {status: 400, error: 'Укажите имя и PIN из 4 цифр'};
     const account = byName.get(project.id, nameKey(name));
-    if (!account) return {status: 401, code: 'name_not_found', error: 'Такого имени нет. Проверьте написание или создайте имя.'};
+    if (!account) return {status: 401, code: 'name_not_found', error: project.reporterRegistration === false
+      ? 'Такого имени нет. Проверьте выданное имя или обратитесь к сопровождающему проекта.'
+      : 'Такого имени нет. Проверьте написание или создайте имя.'};
     if (account.locked_until > Date.now()) return {status: 429, error: 'Слишком много ошибок PIN. Повторите позже'};
     const attemptedHash = await hashPin(body.pin, account.pin_salt);
     const correct = timingSafeEqual(Buffer.from(attemptedHash, 'hex'), Buffer.from(account.pin_hash, 'hex'));

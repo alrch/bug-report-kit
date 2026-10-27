@@ -53,11 +53,11 @@
   <main>
     <section class="panel login-panel" id="login">
       <h2>Баги команды</h2>
-      <p class="muted">Войдите с именем и PIN, которые используете в виджете.</p>
+      <p class="muted" id="login-hint">Войдите с именем и PIN, которые используете в виджете.</p>
       <label class="field" id="login-project-field">Проект<select id="login-project"></select></label>
       <label class="field">Имя<input id="login-name" autocomplete="username" maxlength="80"></label>
       <label class="field">PIN<input id="login-pin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="current-password"></label>
-      <div class="row"><button id="register-button">Создать имя</button><button id="login-button" class="primary">Войти</button></div>
+      <div class="row"><button id="register-button" hidden>Создать имя</button><button id="login-button" class="primary">Войти</button></div>
       <p id="login-error" class="error" role="alert"></p>
     </section>
     <section id="workspace" hidden>

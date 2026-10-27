@@ -240,7 +240,7 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
       }
       if (req.method === 'GET' && url.pathname === '/api/panel/projects') {
         return json(res, 200, config.projects.filter((project) => project.reporterAuth && project.panelAccess)
-          .map(({id, name}) => ({id, name: name || id})));
+          .map(({id, name, reporterRegistration}) => ({id, name: name || id, reporterRegistration: reporterRegistration !== false})));
       }
       if (req.method === 'POST' && ['/api/panel/login', '/api/panel/register'].includes(url.pathname)) {
         const body = await readJson(req);
@@ -262,6 +262,9 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
         const project = projectFor(req.headers['x-project-key']);
         if (!project?.reporterAuth || !origin || !project.allowedOrigins?.includes(origin)) {
           return json(res, 403, {error: 'Проект или адрес не разрешён'});
+        }
+        if (req.method === 'POST' && url.pathname === '/api/reporter/options') {
+          return json(res, 200, {registrationEnabled: project.reporterRegistration !== false});
         }
         if (req.method === 'POST' && url.pathname === '/api/reporter/register') {
           const result = await reporterAuth.register(project, await readJson(req), clientIpFor(req));

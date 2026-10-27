@@ -10,6 +10,7 @@
       "name": "Example project",
       "widgetKey": "replace-with-random-public-key",
       "reporterAuth": true,
+      "reporterRegistration": true,
       "panelAccess": true,
       "allowedOrigins": ["http://localhost:7338"],
       "repositories": [

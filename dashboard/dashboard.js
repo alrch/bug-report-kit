@@ -5,6 +5,8 @@ let imageUrl = '';
 let offset = 0;
 let actor = null;
 let projectNames = new Map();
+let loginProjects = [];
+const closedRegistrationHint = 'Самостоятельная регистрация закрыта. Войдите с выданными именем и PIN или обратитесь к сопровождающему проекта.';
 const statusLabels = {new:'Новый',triaged:'В очереди',in_progress:'Исправляется',
   ready_for_check:'Проверить исправление',closed:'Исправлен',cancelled:'Отменён'};
 
@@ -276,15 +278,25 @@ async function loadLoginProjects() {
   const response = await fetch('/api/panel/projects');
   if (!response.ok) throw new Error('Не удалось загрузить проекты');
   const projects = await response.json();
+  loginProjects = projects;
   const select = $('#login-project');
   select.replaceChildren();
   for (const project of projects) select.add(new Option(project.name, project.id));
   $('#login-project-field').hidden = projects.length <= 1;
   $('#login-button').disabled = $('#register-button').disabled = !projects.length;
+  updateRegistration();
   if (!projects.length) $('#login-error').textContent = 'Для входа по PIN включите panelAccess в настройках проекта.';
 }
 
+function updateRegistration() {
+  const allowed = loginProjects.find(project => project.id === $('#login-project').value)?.reporterRegistration === true;
+  $('#register-button').hidden = !allowed;
+  $('#login-hint').textContent = allowed
+    ? 'Войдите с именем и PIN, которые используете в виджете.' : closedRegistrationHint;
+}
+
 async function signIn(mode) {
+  if (mode === 'register' && $('#register-button').hidden) return;
   $('#login-error').textContent = '';
   const body = {projectId: $('#login-project').value, name: $('#login-name').value.trim(),
     pin: $('#login-pin').value};
@@ -296,8 +308,17 @@ async function signIn(mode) {
   try {
     const response = await fetch(`/api/panel/${mode}`, {method: 'POST',
       headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || 'Не удалось войти');
+    const result = await response.json().catch(() => ({
+      code: response.status === 403 && mode === 'register' ? 'registration_closed' : undefined,
+      error: response.status === 403 && mode === 'register'
+        ? closedRegistrationHint : `Сервис сообщений о багах недоступен (HTTP ${response.status}). Попробуйте позже.`}));
+    if (!response.ok) {
+      if (result.code === 'registration_closed') {
+        $('#register-button').hidden = true;
+        $('#login-hint').textContent = closedRegistrationHint;
+      }
+      throw new Error(result.error || 'Не удалось войти');
+    }
     token = result.token;
     $('#login-pin').value = '';
     await enter();
@@ -313,6 +334,7 @@ function summaryQuery() {
 }
 
 $('#login-button').onclick = () => signIn('login');
+$('#login-project').onchange = updateRegistration;
 $('#register-button').onclick = () => signIn('register');
 $('#login-pin').onkeydown = (event) => { if (event.key === 'Enter') void signIn('login'); };
 $('#refresh').onclick = () => loadList().catch((error) => message(error.message, true));
