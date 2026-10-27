@@ -234,7 +234,9 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     heading.textContent = 'Кто сообщает о баге?';
     const hint = document.createElement('p');
     hint.className = 'meta';
-    hint.textContent = 'Войдите со своим именем или создайте новое. PIN — 4 цифры.';
+    hint.textContent = 'Войдите со своим именем. PIN — 4 цифры.';
+    let registrationAllowed = false;
+    const closedRegistrationHint = 'Самостоятельная регистрация закрыта. Войдите с выданными именем и PIN или обратитесь к сопровождающему проекта.';
     const name = document.createElement('input');
     name.type = 'text'; name.maxLength = 80; name.autocomplete = 'username';
     name.placeholder = 'Имя или ник';
@@ -264,6 +266,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     const cancel = button('Отмена');
     const login = button('Войти', 'primary');
     const register = button('Создать имя');
+    register.hidden = true;
     const close = () => {
       backdrop.remove(); syncInteraction();
       root.removeEventListener('keydown', onKey);
@@ -275,7 +278,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     cancel.onclick = close;
     let submitting = false;
     async function submit(action) {
-      if (submitting) return;
+      if (submitting || (action === 'register' && !registrationAllowed)) return;
       const enteredName = name.value.trim();
       if (enteredName.length < 2 || enteredName.length > 80) {
         message.className = 'error'; message.textContent = 'Имя должно содержать от 2 до 80 символов'; return;
@@ -291,7 +294,10 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
           method: 'POST', headers: {'Content-Type': 'application/json', 'X-Project-Key': projectKey},
           body: JSON.stringify({name: enteredName, pin: pin.value}),
         });
-        const result = await response.json();
+        const result = await response.json().catch(() => ({
+          code: response.status === 403 && action === 'register' ? 'registration_closed' : undefined,
+          error: response.status === 403 && action === 'register'
+            ? closedRegistrationHint : `Сервис сообщений о багах недоступен (HTTP ${response.status}). Попробуйте позже.`}));
         if (!response.ok) {
           const failure = new Error(result.error || 'Не удалось войти');
           failure.code = result.code;
@@ -307,7 +313,14 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
       } catch (cause) {
         message.className = 'error';
         message.textContent = cause instanceof TypeError ? 'Нет связи с сервером. Попробуйте ещё раз.' : cause.message;
-        if (cause.code === 'name_not_found') {
+        if (cause.code === 'registration_closed') {
+          registrationAllowed = false;
+          register.hidden = true;
+          hint.textContent = closedRegistrationHint;
+          suggestedAction = 'login';
+          login.classList.add('primary');
+          name.focus();
+        } else if (cause.code === 'name_not_found' && registrationAllowed) {
           suggestedAction = 'register';
           login.classList.remove('primary');
           register.classList.add('primary');
@@ -332,6 +345,17 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     backdrop.append(card);
     root.append(backdrop); syncInteraction();
     name.focus();
+    // POST supplies Origin even when the widget and Kit share an origin.
+    // Until the policy arrives, offer login only; an outage never opens registration.
+    void fetch(`${base}/api/reporter/options`, {method: 'POST', headers: {'X-Project-Key': projectKey}})
+      .then(async response => response.ok ? response.json() : null)
+      .then(options => {
+        if (!options || !backdrop.isConnected || destroyed) return;
+        registrationAllowed = options.registrationEnabled === true;
+        register.hidden = !registrationAllowed;
+        hint.textContent = registrationAllowed
+          ? 'Войдите со своим именем или создайте новое. PIN — 4 цифры.' : closedRegistrationHint;
+      }).catch(() => { /* Existing accounts can still try to sign in. */ });
   }
 
   function showForm({screenshot, selection, error = ''}) {
