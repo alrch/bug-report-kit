@@ -86,7 +86,7 @@ jobs:
         run: espeak-ng -v ru -s 120 -w "$RUNNER_TEMP/synthetic-ru.wav" 'Проверка распознавания речи в тестовом контейнере.'
       - name: Verify pinned public model revision
         working-directory: source
-        run: rg -F '536b0662742c02347bc0e980a01041f333bce120' scripts/prepare-speech-model.py
+        run: grep -F '536b0662742c02347bc0e980a01041f333bce120' scripts/prepare-speech-model.py
       - name: Build native linux/amd64 speech and runtime images
         env:
           SOURCE_SHA: ${{ steps.source.outputs.sha }}
