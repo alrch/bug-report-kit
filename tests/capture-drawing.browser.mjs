@@ -60,10 +60,10 @@ test('idle WebGL, modern colors and SVG controls survive capture; widget release
   await page.keyboard.press('Escape');releaseSession();
   await page.waitForTimeout(50);
   assert.equal(await page.locator('[data-bug-report-kit-active]').count(),0);
-  assert.equal(await page.getByText('Выделите область мышью · Esc — отмена',{exact:true}).count(),0);
+  assert.equal(await page.getByText('Выделите проблемную область',{exact:true}).count(),0);
   await page.getByRole('button',{name:'Включить ловитель',exact:true}).click();
   await page.getByRole('button',{name:'Сообщить о баге',exact:true}).click();
-  await page.getByText('Выделите область мышью · Esc — отмена',{exact:true}).waitFor();
+  await page.getByText('Выделите проблемную область',{exact:true}).waitFor();
   await page.keyboard.press('F8');
   assert.equal(await page.locator('[data-bug-report-kit]').count(),0);
   const field=page.getByRole('textbox',{name:'Клавиатура после удаления',exact:true});

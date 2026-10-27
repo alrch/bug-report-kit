@@ -11,11 +11,12 @@ const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQ
 const listen = (server) => new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const close = (server) => new Promise((resolve) => server.close(resolve));
 const drag = async (page, x1, y1, x2, y2) => {
-  await page.locator('.overlay').waitFor({state: 'visible'});
+  await page.locator('.overlay:not(.is-preparing)').waitFor({state: 'visible'});
   await page.mouse.move(x1, y1);
   await page.mouse.down();
   await page.mouse.move(x2, y2, {steps: 8});
   await page.mouse.up();
+  if (Math.abs(x2-x1)>=24 && Math.abs(y2-y1)>=24) await page.getByRole('button', {name:'Подтвердить выделение',exact:true}).click();
 };
 
 // Run separately from npm test: npm run test:browser (requires installed Chromium).
@@ -107,7 +108,7 @@ test('widget browser regressions and reviewer handoff', async (t) => {
     try {
       await page.goto(siteOrigin);
       await page.getByRole('button', {name:'Report issue'}).click();
-      await page.locator('.overlay').waitFor({state:'visible'});
+      await page.locator('.overlay:not(.is-preparing)').waitFor({state:'visible'});
       await drag(page,110,30,180,100);
       const preview=page.locator('img.preview');
       await preview.waitFor({state:'visible'});
@@ -137,7 +138,7 @@ test('widget browser regressions and reviewer handoff', async (t) => {
         mimeType: 'application/octet-stream', buffer: fileBytes});
       await page.getByText('wrong-export.docx').waitFor();
       assert.equal(await preview.getAttribute('src'), originalScreenshot);
-      await page.getByPlaceholder('Суть бага, шаги для воспроизведения').fill('Неверная выгрузка документа');
+      await page.getByPlaceholder('Суть бага, шаги для воспроизведения и что ожидалось').fill('Неверная выгрузка документа');
       const submitted = page.waitForResponse((response) => response.url() === `${kitBase}/api/reports` && response.request().method() === 'POST');
       await page.getByRole('button', {name: 'Отправить'}).click();
       const response = await submitted;
@@ -173,8 +174,8 @@ test('widget browser regressions and reviewer handoff', async (t) => {
         return [...context.getImageData(0, 0, 1, 1).data];
       });
       assert.ok(Math.abs(pixel[0] - 40) <= 3 && Math.abs(pixel[1] - 150) <= 3 && Math.abs(pixel[2] - 80) <= 3, `Wrong crop: ${pixel}`);
-      await page.getByPlaceholder('Суть бага, шаги для воспроизведения').fill('Browser capture\nСнимок прокрученной страницы\nОткрыть страницу и выделить область');
-      await page.getByPlaceholder('Что ожидалось').fill('Выделенная область видна в снимке');
+      await page.getByPlaceholder('Суть бага, шаги для воспроизведения и что ожидалось').fill('Browser capture\nСнимок прокрученной страницы\nОткрыть страницу и выделить область');
+      await page.getByPlaceholder('Суть бага, шаги для воспроизведения и что ожидалось').fill('Browser capture\nСнимок прокрученной страницы\nОткрыть страницу и выделить область\nОжидалось: выделенная область видна в снимке');
       const submitted = page.waitForResponse((response) => response.url() === `${kitBase}/api/reports` && response.request().method() === 'POST');
       await page.getByRole('button', {name: 'Отправить'}).click();
       const response = await submitted;
@@ -191,7 +192,7 @@ test('widget browser regressions and reviewer handoff', async (t) => {
     const submit = async (page, title) => {
       await page.getByRole('button', {name: 'Report issue'}).click();
       await drag(page, 100, 150, 260, 300);
-      await page.getByPlaceholder('Суть бага, шаги для воспроизведения').fill(`${title}\nПроверка анонимного ID`);
+      await page.getByPlaceholder('Суть бага, шаги для воспроизведения и что ожидалось').fill(`${title}\nПроверка анонимного ID`);
       const submitted = page.waitForResponse((response) => response.url() === `${kitBase}/api/reports` && response.status() === 201);
       await page.getByRole('button', {name: 'Отправить'}).click();
       return detail((await (await submitted).json()).id);
@@ -230,35 +231,30 @@ test('widget browser regressions and reviewer handoff', async (t) => {
       await page.getByPlaceholder('Имя или ник').fill('Тестировщик один');
       await page.getByLabel('PIN из 4 цифр').fill('1234');
       await page.getByRole('button', {name: authAction}).click();
-      await page.locator('.overlay').waitFor({state: 'visible'});
+      await page.locator('.overlay:not(.is-preparing)').waitFor({state: 'visible'});
       assert.equal(await page.getByPlaceholder('Имя или ник').count(), 0,
         'Auth dialog should close before area selection');
       await drag(page, 100, 150, 260, 300);
-      await page.getByPlaceholder('Суть бага, шаги для воспроизведения').waitFor({state: 'visible'});
+      await page.getByPlaceholder('Суть бага, шаги для воспроизведения и что ожидалось').waitFor({state: 'visible'});
       assert.equal(await page.getByText('Можно приложить файл', {exact: false}).count(), 0);
       assert.equal(await page.getByLabel('Прикрепить файл').count(), 1);
       assert.equal(await page.locator('.upload-action svg').count(), 1);
-      assert.equal(await page.locator('.report-card .report-field').count(), 2);
-      assert.equal(await page.locator('textarea').count(), 2, 'Bug form should contain the combined description and expected result');
+      assert.equal(await page.locator('.report-card .report-field').count(), 1);
+      assert.equal(await page.locator('textarea').count(), 1, 'Bug form should contain the combined description and expected result');
       const previewCenterOffset = await page.locator('img.preview').evaluate((image) => {
         const imageRect = image.getBoundingClientRect();
         const cardRect = image.closest('.card').getBoundingClientRect();
         return Math.abs((imageRect.left + imageRect.width / 2) - (cardRect.left + cardRect.width / 2));
       });
       assert.ok(previewCenterOffset <= 4, `Screenshot preview is ${previewCenterOffset}px off the card center`);
-      const textarea = page.getByPlaceholder('Суть бага, шаги для воспроизведения');
-      assert.equal(await textarea.getAttribute('maxlength'), '2000');
-      assert.equal(await page.locator('#bug-kit-description-count').textContent(), '0 / 2000');
+      const textarea = page.getByPlaceholder('Суть бага, шаги для воспроизведения и что ожидалось');
+      assert.equal(await textarea.getAttribute('maxlength'), '4000');
+      assert.equal(await page.locator('#bug-kit-description-count').textContent(), '0 / 4000');
       const countSample = 'Описание ошибки и шаги';
       await textarea.fill(countSample);
-      assert.equal(await page.locator('#bug-kit-description-count').textContent(), `${countSample.length} / 2000`);
+      assert.equal(await page.locator('#bug-kit-description-count').textContent(), `${countSample.length} / 4000`);
       await textarea.fill(`${title}\nАвторизованный отчёт\nВойти и открыть страницу`);
-      const expectedArea = page.getByPlaceholder('Что ожидалось');
-      assert.equal(await expectedArea.getAttribute('maxlength'), '2000');
-      assert.equal(await page.locator('#bug-kit-expected-count').textContent(), '0 / 2000');
-      const expectedSample = 'Ожидаемый результат';
-      await expectedArea.fill(expectedSample);
-      assert.equal(await page.locator('#bug-kit-expected-count').textContent(), `${expectedSample.length} / 2000`);
+      assert.equal(await page.locator('.report-fields textarea').count(),1);
       const submitted = page.waitForResponse((response) => response.url() === `${kitBase}/api/reports` && response.request().method() === 'POST');
       await page.getByRole('button', {name: 'Отправить'}).click();
       const response = await submitted;
@@ -282,7 +278,7 @@ test('widget browser regressions and reviewer handoff', async (t) => {
 
       await page.reload();
       await page.getByRole('button', {name: 'Report issue'}).click();
-      await page.locator('.overlay').waitFor({state: 'visible'});
+      await page.locator('.overlay:not(.is-preparing)').waitFor({state: 'visible'});
       assert.equal(await page.getByPlaceholder('Имя или ник').count(), 0,
         'A saved session should skip auth and start selection immediately');
       let expireOnce = true;
@@ -296,11 +292,9 @@ test('widget browser regressions and reviewer handoff', async (t) => {
         return route.continue();
       });
       const draft = 'Reporter auth restored session\nСессия завершилась при отправке';
-      const description = page.getByPlaceholder('Суть бага, шаги для воспроизведения');
-      const expected = page.getByPlaceholder('Что ожидалось');
+      const description = page.getByPlaceholder('Суть бага, шаги для воспроизведения и что ожидалось');
       await drag(page, 100, 150, 260, 300);
       await description.fill(draft);
-      await expected.fill('Отправка должна пройти после входа');
       const capturedScreenshot = await page.locator('img.preview').getAttribute('src');
       assert.equal(await page.getByText('Автор: Тестировщик один').count(), 1);
       await page.getByRole('button', {name: 'Выйти'}).click();
@@ -311,7 +305,6 @@ test('widget browser regressions and reviewer handoff', async (t) => {
       await signInDialog.waitFor({state: 'hidden'});
       assert.equal(await page.getByRole('button', {name: 'Войти'}).count(), 1);
       assert.equal(await description.inputValue(), draft, 'Canceling sign-in should preserve the report draft');
-      assert.equal(await expected.inputValue(), 'Отправка должна пройти после входа');
       assert.equal(await page.locator('img.preview').getAttribute('src'), capturedScreenshot);
 
       await page.locator('.reporter-identity').getByRole('button', {name: 'Войти'}).click();
@@ -322,7 +315,6 @@ test('widget browser regressions and reviewer handoff', async (t) => {
       await reauthDialog.getByRole('button', {name: 'Войти'}).click();
       await reauthDialog.waitFor({state: 'hidden'});
       assert.equal(await description.inputValue(), draft, 'Signing in again should preserve the report draft');
-      assert.equal(await expected.inputValue(), 'Отправка должна пройти после входа');
       assert.equal(await page.locator('img.preview').getAttribute('src'), capturedScreenshot);
       assert.equal(await page.getByText('Автор: Тестировщик один').count(), 1);
 
@@ -336,7 +328,6 @@ test('widget browser regressions and reviewer handoff', async (t) => {
       await authDialog.getByRole('button', {name: 'Войти'}).click();
       await authDialog.waitFor({state: 'hidden'});
       assert.equal(await description.inputValue(), draft);
-      assert.equal(await expected.inputValue(), 'Отправка должна пройти после входа');
       assert.equal(await page.locator('img.preview').getAttribute('src'), capturedScreenshot);
       const restoredSubmit = page.waitForResponse((response) => response.url() === `${kitBase}/api/reports` && response.status() === 201);
       await page.getByRole('button', {name: 'Отправить'}).click();
@@ -399,13 +390,13 @@ test('widget browser regressions and reviewer handoff', async (t) => {
     } finally { await context.close(); await otherContext.close(); }
   });
 
-  await t.test('touch drag opens the form instead of cancelling the pointer', async () => {
+  await t.test('touch drag keeps an editable frame until confirmation', async () => {
     const context = await browser.newContext({viewport: {width: 390, height: 844}, isMobile: true, hasTouch: true, deviceScaleFactor: 2});
     const page = await context.newPage();
     try {
       await page.goto(siteOrigin);
       await page.getByRole('button', {name: 'Report issue'}).tap();
-      await page.locator('.overlay').waitFor({state: 'visible'});
+      await page.locator('.overlay:not(.is-preparing)').waitFor({state: 'visible'});
       const cdp = await context.newCDPSession(page);
       const touch = (type, x, y) => cdp.send('Input.dispatchTouchEvent', {
         type, touchPoints: type === 'touchEnd' ? [] : [{x, y, id: 1}],
@@ -416,7 +407,9 @@ test('widget browser regressions and reviewer handoff', async (t) => {
         await page.waitForTimeout(25);
       }
       await touch('touchEnd', 210, 300);
-      await page.getByPlaceholder('Суть бага, шаги для воспроизведения').waitFor({state: 'visible'});
+      assert.equal(await page.locator('.report-card').count(),0);
+      await page.getByRole('button',{name:'Подтвердить выделение',exact:true}).tap();
+      await page.getByPlaceholder('Суть бага, шаги для воспроизведения и что ожидалось').waitFor({state: 'visible'});
       assert.equal(await page.locator('.overlay').count(), 0);
     } finally { await context.close(); }
   });
@@ -444,7 +437,7 @@ test('widget browser regressions and reviewer handoff', async (t) => {
       await page.getByRole('button', {name: 'Report issue'}).click();
       await drag(page, 80, 120, 90, 130);
       assert.equal(await page.locator('.overlay').count(), 1);
-      assert.equal(await page.getByPlaceholder('Суть бага, шаги для воспроизведения').count(), 0);
+      assert.equal(await page.getByPlaceholder('Суть бага, шаги для воспроизведения и что ожидалось').count(), 0);
       await page.keyboard.press('Escape');
       assert.equal(await page.locator('.overlay').count(), 0);
       await page.locator('#target').scrollIntoViewIfNeeded();
@@ -475,19 +468,19 @@ test('widget browser regressions and reviewer handoff', async (t) => {
       await page.locator('#target').scrollIntoViewIfNeeded();
       const scrollBefore = await page.evaluate(()=>scrollY);
       await page.getByRole('button',{name:'Report issue'}).click();
-      await page.locator('.overlay').waitFor({state:'visible'});
+      await page.locator('.overlay:not(.is-preparing)').waitFor({state:'visible'});
       await page.mouse.move(400,300); await page.mouse.wheel(0,300);
       await page.waitForTimeout(100);
       assert.equal(await page.evaluate(()=>scrollY),scrollBefore,'selection must not scroll the hidden live page');
       await page.setViewportSize({width:760,height:580});
-      await page.locator('.overlay').waitFor({state:'detached'});
+      await page.locator('.overlay:not(.is-preparing)').waitFor({state:'detached'});
       assert.equal(await page.locator('img.preview').count(),0);
       await page.getByRole('button',{name:'Report issue'}).click();
-      await page.locator('.overlay').waitFor({state:'visible'});
+      await page.locator('.overlay:not(.is-preparing)').waitFor({state:'visible'});
       await page.locator('.selection-cancel').click();
       assert.equal(await page.locator('.overlay').count(),0);
       await page.getByRole('button',{name:'Report issue'}).click();
-      await page.locator('.overlay').waitFor({state:'visible'});
+      await page.locator('.overlay:not(.is-preparing)').waitFor({state:'visible'});
       await page.keyboard.press('Escape');
       assert.equal(await page.locator('.overlay').count(),0);
     } finally {await page.close();}
@@ -498,11 +491,11 @@ test('widget browser regressions and reviewer handoff', async (t) => {
     try {
       await page.goto(siteOrigin);
       await page.getByRole('button',{name:'Report issue'}).dblclick();
-      await page.locator('.overlay').waitFor({state:'visible'});
+      await page.locator('.overlay:not(.is-preparing)').waitFor({state:'visible'});
       assert.equal(await page.locator('.overlay').count(),1);
       await page.keyboard.press('Escape');
       await page.getByRole('button',{name:'Report issue'}).click();
-      await page.locator('.overlay').waitFor({state:'visible'});
+      await page.locator('.overlay:not(.is-preparing)').waitFor({state:'visible'});
       assert.equal(await page.locator('.overlay').count(),1);
       await drag(page,180,220,30,140);
       await page.locator('img.preview').waitFor({state:'visible'});
@@ -510,7 +503,7 @@ test('widget browser regressions and reviewer handoff', async (t) => {
       await page.locator('.report-card').getByRole('button',{name:'Отмена',exact:true}).click();
       assert.equal(await page.locator('.overlay,.report-card').count(),0);
       await page.getByRole('button',{name:'Report issue'}).click();
-      await page.locator('.overlay').waitFor({state:'visible'});
+      await page.locator('.overlay:not(.is-preparing)').waitFor({state:'visible'});
       await page.locator('.selection-cancel').click();
       assert.equal(await page.locator('.overlay,.report-card').count(),0);
     } finally {await page.close();}
@@ -523,11 +516,11 @@ test('widget browser regressions and reviewer handoff', async (t) => {
       await page.evaluate(() => { HTMLCanvasElement.prototype.toDataURL = () => { throw new Error('forced failure'); }; });
       await page.getByRole('button', {name: 'Report issue'}).click();
       await drag(page, 100, 150, 320, 340);
-      await page.getByPlaceholder('Суть бага, шаги для воспроизведения').waitFor({state: 'visible'});
+      await page.getByPlaceholder('Суть бага, шаги для воспроизведения и что ожидалось').waitFor({state: 'visible'});
       assert.match((await page.locator('.error').textContent()), /Снимок не получился/);
       assert.equal(await page.locator('img.preview').evaluate((img) => getComputedStyle(img).display), 'none');
       await page.locator('input[type=file]').setInputFiles({name: 'fallback.png', mimeType: 'image/png', buffer: png});
-      await page.getByPlaceholder('Суть бага, шаги для воспроизведения').fill('Manual image\nСнимок приложен вручную');
+      await page.getByPlaceholder('Суть бага, шаги для воспроизведения и что ожидалось').fill('Manual image\nСнимок приложен вручную');
       const submitted = page.waitForResponse((response) => response.url() === `${kitBase}/api/reports` && response.request().method() === 'POST');
       await page.getByRole('button', {name: 'Отправить'}).click();
       const response = await submitted;
@@ -558,13 +551,13 @@ test('widget browser regressions and reviewer handoff', async (t) => {
       await page.evaluate(async () => { await fetch('/missing?token=secret123'); });
       await page.getByRole('button', {name: 'Report issue'}).click();
       await drag(page, 100, 150, 320, 340);
-      await page.getByPlaceholder('Суть бага, шаги для воспроизведения').waitFor({state: 'visible'});
-      await page.getByPlaceholder('Суть бага, шаги для воспроизведения').fill('Retry check\nОписание сохраняется после ошибки\nПовторно отправить после ошибки');
+      await page.getByPlaceholder('Суть бага, шаги для воспроизведения и что ожидалось').waitFor({state: 'visible'});
+      await page.getByPlaceholder('Суть бага, шаги для воспроизведения и что ожидалось').fill('Retry check\nОписание сохраняется после ошибки\nПовторно отправить после ошибки');
       assert.equal(await page.getByLabel('Кто сообщает').inputValue(), 'Автор из активной сессии');
       assert.equal(await page.getByLabel('Контакт для уточнений (необязательно)').inputValue(), 'session@example.test');
       await page.getByRole('button', {name: 'Отправить'}).click();
       await page.locator('.error').getByText('Temporary failure').waitFor();
-      assert.equal(await page.getByPlaceholder('Суть бага, шаги для воспроизведения').inputValue(), 'Retry check\nОписание сохраняется после ошибки\nПовторно отправить после ошибки');
+      assert.equal(await page.getByPlaceholder('Суть бага, шаги для воспроизведения и что ожидалось').inputValue(), 'Retry check\nОписание сохраняется после ошибки\nПовторно отправить после ошибки');
       const submitted = page.waitForResponse((response) => response.url() === `${kitBase}/api/reports` && response.status() === 201);
       await page.getByRole('button', {name: 'Отправить'}).click();
       const response = await submitted;
@@ -594,11 +587,11 @@ test('widget browser regressions and reviewer handoff', async (t) => {
       await page.goto(siteOrigin);
       await page.getByRole('button', {name: 'Report issue'}).click();
       await drag(page, 100, 150, 320, 340);
-      await page.getByPlaceholder('Суть бага, шаги для воспроизведения').waitFor({state: 'visible'});
-      await page.getByPlaceholder('Суть бага, шаги для воспроизведения').fill('Offline check\nОписание при отсутствии сети');
+      await page.getByPlaceholder('Суть бага, шаги для воспроизведения и что ожидалось').waitFor({state: 'visible'});
+      await page.getByPlaceholder('Суть бага, шаги для воспроизведения и что ожидалось').fill('Offline check\nОписание при отсутствии сети');
       await page.getByRole('button', {name: 'Отправить'}).click();
       await page.locator('.error').getByText(/Не удалось связаться с сервером/).waitFor();
-      assert.equal(await page.getByPlaceholder('Суть бага, шаги для воспроизведения').inputValue(), 'Offline check\nОписание при отсутствии сети');
+      assert.equal(await page.getByPlaceholder('Суть бага, шаги для воспроизведения и что ожидалось').inputValue(), 'Offline check\nОписание при отсутствии сети');
       const submitted = page.waitForResponse((response) => response.url() === `${kitBase}/api/reports` && response.status() === 201);
       await page.getByRole('button', {name: 'Отправить'}).click();
       await submitted;

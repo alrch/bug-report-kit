@@ -5,11 +5,11 @@
 ```sh
 npm ci
 npm test
-npx playwright install chromium
+npx playwright install chromium webkit
 npm run test:browser
 ```
 
-`npm test` проверяет сервер: авторизацию по проекту и роли, переходы статусов и ревизии, фильтрацию до пагинации, HTML и сводки, миграцию старой базы, резервную копию. `npm run test:browser` собирает виджет и проверяет его в настоящем Chromium:
+`npm test` проверяет сервер: авторизацию по проекту и роли, переходы статусов и ревизии, фильтрацию до пагинации, HTML и сводки, миграцию старой базы, резервную копию. `npm run test:browser` собирает виджет и проверяет его в настоящих Chromium и WebKit:
 
 | Риск из истории разработки | Проверка |
 | --- | --- |
@@ -67,3 +67,20 @@ Real Roof C dropdown crop/send/exact saved JPEG readback and A WebGL3D crop/canc
 verified through authorized temporary pilot proxy. Project title,0.1,selected0.5m
 are complete. TEST card242d61dc-20fb-45f5-9570-af675619306d; main untouched.
 Evidence/passport in roof-pro-pilot/work/tz/261016_pilot_audit.md. Not human accepted.
+
+
+## Новые сценарии голоса, zoom и жизненного цикла
+
+`voice-submit.browser.mjs` использует реальный MediaRecorder с синтетическим
+звуком: «Готово» и микрофон, одно поле4000, ASR до создания отчёта, синяя
+плашка на коротком viewport, ошибки/повтор/TTL/отмена и отдельное хранение
+машинного и исправленного текста. WebKit получает Web Audio stream вместо
+микрофона комнаты. `mobile-zoom.browser.mjs` выполняет настоящий CDP pinch/pan,
+проверяет плотностьDPR×zoom, бюджет16млн пикселей и неизменные координаты crop.
+`viewport-contract.browser.mjs` отдельно моделирует метрики фиксированного
+слоя Safari. `lifecycle.browser.mjs` проверяет повторный script embed с открытым
+черновиком, идемпотентный destroy и чистое повторное подключение.
+
+Проверки браузерных движков не заменяют приёмку физического устройства и
+политик конкретного gateway/CSP/iframe. Ни один fixture не подключает чужой
+проект, реальный микрофон или рабочую очередь багов.

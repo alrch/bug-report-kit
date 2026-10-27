@@ -1,6 +1,7 @@
 :host{all:initial;font:14px system-ui,sans-serif;color:#172033}
 *{box-sizing:border-box}
 button,textarea,input{font:inherit}
+input,textarea{font-size:16px}
 button{cursor:pointer}
 .launcher{position:fixed;right:20px;bottom:20px;z-index:2147483000;border:0;border-radius:999px;padding:12px 18px;background:#2047d9;color:white;box-shadow:0 4px 18px #0004}
 .launcher-compact{touch-action:none;user-select:none;cursor:grab;top:16px;bottom:auto;width:40px;height:40px;padding:10px;border:1px solid #71809838;border-radius:12px;background:#f5f7faaa;color:#68758a;box-shadow:0 2px 8px #17203310;backdrop-filter:blur(8px);transition:background .15s,color .15s,box-shadow .15s}
@@ -48,7 +49,7 @@ textarea{display:block;width:100%;min-height:110px;padding:10px;border:1px solid
 .preview-frame .preview{display:block;max-width:100%;max-height:154px;width:auto;height:auto;margin:0;border:0;border-radius:5px;box-shadow:0 2px 8px #1829441c}
 .preview-frame .preview[hidden]{display:none}
 .report-fields{display:grid;gap:13px}
-.report-field textarea{display:block;width:100%;min-height:104px;margin:0;padding:14px 16px;border:1px solid #d8e0ec;border-radius:12px;background:#fbfcff;color:#172033;line-height:1.5;font-size:14px;font-weight:400;resize:vertical;outline:none;transition:border-color .16s,box-shadow .16s,background .16s}
+.report-field textarea{display:block;width:100%;min-height:104px;margin:0;padding:14px 16px;border:1px solid #d8e0ec;border-radius:12px;background:#fbfcff;color:#172033;line-height:1.5;font-size:16px;font-weight:400;resize:vertical;outline:none;transition:border-color .16s,box-shadow .16s,background .16s}
 .report-field:nth-child(2) textarea{min-height:86px}
 .report-field textarea::placeholder{color:#8290a5;opacity:1}
 .report-field textarea:focus{border-color:#3e68dc;background:#fff;box-shadow:0 0 0 3px #3e68dc1c}
@@ -69,6 +70,8 @@ textarea{display:block;width:100%;min-height:110px;padding:10px;border:1px solid
 .report-footer .row button{padding:10px 15px;border-radius:10px;border-color:#d8e0ec;font-size:13px;font-weight:600}
 .report-footer .row .primary{border-color:#2047d9;background:#2047d9;box-shadow:0 5px 12px #2047d92b}
 .report-footer .row .primary:hover{background:#183bc2}
+.report-footer .row button:disabled{opacity:.45;cursor:not-allowed;box-shadow:none}
+.report-footer .row .primary:disabled:hover{background:#2047d9}
 @media(max-width:520px){.report-card{padding:22px 18px;border-radius:16px}.report-context{align-items:flex-start;flex-direction:column;gap:6px}.report-context> .meta:first-child{max-width:100%}.preview-frame{height:140px}.preview-frame .preview{max-height:118px}.report-footer .row button{padding:10px 12px}.report-toast{right:16px;bottom:76px}}
 
 .launcher-compact:active{cursor:grabbing}
@@ -84,3 +87,46 @@ textarea{display:block;width:100%;min-height:110px;padding:10px;border:1px solid
 .screenshot-viewer-viewport.is-actual img{max-width:none;max-height:none;margin:0}
 
 .overlay.is-preparing{background:transparent;cursor:progress}
+.selection-tools{position:absolute;bottom:max(16px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);display:flex;gap:8px;z-index:2;padding:8px;background:#fff;border-radius:12px;box-shadow:0 3px 20px #0004;white-space:nowrap}
+.selection-tools button{min-width:44px;min-height:44px;border:1px solid #c7d0dc;border-radius:8px;background:#fff;color:#172033;padding:8px}
+.selection-tools button:first-child{background:#2047d9;color:#fff;font-size:24px}
+.selection-tools button:nth-child(2){font-size:26px}
+.selection-tools button:disabled{opacity:.4}
+.box{pointer-events:auto;cursor:move;touch-action:none}
+.box[hidden]{display:none}
+.selection-handle{position:absolute;width:28px;height:28px;padding:0;border:7px solid transparent;border-radius:50%;background:#fff;background-clip:padding-box;touch-action:none;z-index:1}
+.handle-nw{left:-14px;top:-14px;cursor:nw-resize}.handle-n{left:calc(50% - 14px);top:-14px;cursor:n-resize}.handle-ne{right:-14px;top:-14px;cursor:ne-resize}.handle-e{right:-14px;top:calc(50% - 14px);cursor:e-resize}.handle-se{right:-14px;bottom:-14px;cursor:se-resize}.handle-s{left:calc(50% - 14px);bottom:-14px;cursor:s-resize}.handle-sw{left:-14px;bottom:-14px;cursor:sw-resize}.handle-w{left:-14px;top:calc(50% - 14px);cursor:w-resize}
+.overlay .hint{z-index:2;pointer-events:none;max-width:calc(100% - 32px);font-size:13px}
+.voice-input{margin-top:14px;padding:12px;border:1px solid #d8e0ec;border-radius:12px;background:#f7f9fd}
+.voice-input button{min-height:44px;padding:8px 12px;border:1px solid #c7d0dc;border-radius:8px;background:#fff;color:#2047d9;margin:0 6px 6px 0}
+.voice-input audio{display:block;width:100%;margin:6px 0}.voice-input [hidden]{display:none}.voice-input .meta{margin:5px 0;line-height:1.4}
+
+.selection-tools .selection-cancel{position:static;box-shadow:none}
+
+/* One finger edits the frame; two fingers retain native page zoom. */
+.overlay,.box,.selection-handle{touch-action:pinch-zoom}
+.backdrop>.card{max-height:100%;min-height:0}
+
+/* Stable report shell: only its body scrolls or grows when audio is recorded. */
+.report-card{display:flex;flex-direction:column;height:min(100%,760px);overflow:hidden}
+.report-card>.report-header,.report-card>.report-context,.report-card>.report-footer,.report-card>#bug-kit-report-status{flex-shrink:0}
+.report-body{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain}
+.voice-input .voice-status{min-height:1.4em}
+
+/* Voice is a compact action directly beneath the selected screenshot. */
+.voice-input{margin:0 0 14px;padding:0;border:0;border-radius:0;background:transparent}
+.voice-controls{display:flex;align-items:center;gap:10px;min-height:44px}
+.voice-controls button{display:grid;place-items:center;flex:0 0 44px;width:44px;height:44px;min-height:44px;margin:0;padding:10px}
+.voice-controls .voice-status{flex:1;min-width:0;margin:0;font-variant-numeric:tabular-nums}
+.voice-controls svg{display:block;width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.voice-controls .is-recording{border-color:#d44545;background:#fff2f2;color:#b72424}
+.voice-controls .is-recording svg{fill:currentColor;stroke:none}
+.voice-input audio{margin:10px 0 0}
+
+/* Speech feedback stays visible outside the scrolling report body. */
+.speech-status{display:flex;align-items:center;gap:10px;flex-shrink:0;margin:12px 0 0;padding:12px 14px;border:1px solid #b9ccff;border-radius:10px;background:#eff4ff;color:#2047d9;font-size:14px;font-weight:600;line-height:1.4}
+.speech-status[hidden]{display:none}
+.speech-icon{display:grid;place-items:center;flex:0 0 20px;width:20px;height:20px;font-size:20px;line-height:1}
+.speech-status[data-state="pending"] .speech-icon{border:2px solid #2047d933;border-top-color:#2047d9;border-radius:50%;animation:speech-turn .8s linear infinite}
+@keyframes speech-turn{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.speech-status[data-state="pending"] .speech-icon{animation:none}}

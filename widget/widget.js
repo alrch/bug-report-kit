@@ -1,3 +1,6 @@
+import {layoutViewport} from './viewport.js';
+import {selectionControls} from './selection.js';
+import {voiceInput} from './voice.js';
 import {captureViewport, safePageUrl} from './capture.js';
 import {openScreenshotPreview} from './preview.js';
 
@@ -48,6 +51,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
   const base = serverUrl.replace(/\/$/, '');
   let destroyed = false;
   let cancelActiveSelection = null;
+  let disposeVoice = () => {};
   const host = document.createElement('div');
   host.dataset.bugReportKit = '';
   document.body.append(host);
@@ -157,37 +161,46 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
   let suppressLauncherClick = false;
   let placementFrame = 0;
   function placeLauncher() {
-    if (launcher.hidden || dragState?.moved) return;
     const viewport = window.visualViewport;
+    const zoom = viewport?.scale || 1;
+    // Keep dialogs within the visible screen, including a zoomed/panned page and keyboard.
+    for (const panel of root.querySelectorAll('.backdrop')) {
+      Object.assign(panel.style, {inset:'auto',left:`${viewport?.offsetLeft || 0}px`,top:`${viewport?.offsetTop || 0}px`,
+        width:`${(viewport?.width || innerWidth)*zoom}px`,height:`${(viewport?.height || innerHeight)*zoom}px`,
+        transform:`scale(${1/zoom})`,transformOrigin:'0 0'});
+    }
+    if (launcher.hidden || dragState?.moved) return;
+    Object.assign(launcher.style,{transform:`scale(${1/zoom})`,transformOrigin:'0 0'});
     const left = viewport?.offsetLeft || 0;
     const top = viewport?.offsetTop || 0;
     const right = left + (viewport?.width || innerWidth);
     const bottom = top + (viewport?.height || innerHeight);
-    const width = launcher.offsetWidth;
-    const height = launcher.offsetHeight;
+    const width = launcher.offsetWidth / zoom;
+    const height = launcher.offsetHeight / zoom;
+    const gap = collisionGap / zoom;
     const corner = manualCorner || (compactLauncher ? 'top-right' : 'bottom-right');
     const fromRight = corner.endsWith('right');
     const fromBottom = corner.startsWith('bottom');
-    const insetY = compactLauncher || manualCorner ? 16 : 20;
-    const preferredX = fromRight ? right - width - 20 : left + 20;
+    const insetY = (compactLauncher || manualCorner ? 16 : 20) / zoom;
+    const preferredX = fromRight ? right - width - 20 / zoom : left + 20 / zoom;
     const preferredY = fromBottom ? bottom - height - insetY : top + insetY;
     const targets = [...document.querySelectorAll(targetsSelector)]
       .filter((element) => !element.closest('[data-bug-report-kit]'))
       .map((element) => element.getBoundingClientRect())
       .filter((rect) => rect.width && rect.height && rect.bottom > top && rect.top < bottom);
-    const overlaps = (box, rect) => box.left < rect.right + collisionGap
-      && box.right > rect.left - collisionGap
-      && box.top < rect.bottom + collisionGap
-      && box.bottom > rect.top - collisionGap;
-    const stepX = width + collisionGap;
-    const stepY = height + collisionGap;
+    const overlaps = (box, rect) => box.left < rect.right + gap
+      && box.right > rect.left - gap
+      && box.top < rect.bottom + gap
+      && box.bottom > rect.top - gap;
+    const stepX = width + gap;
+    const stepY = height + gap;
     let position;
     for (let row = 0; row < 8 && !position; row += 1) {
       for (let column = 0; column * stepX < right - left && !position; column += 1) {
         const x = preferredX + (fromRight ? -1 : 1) * column * stepX;
         const y = preferredY + (fromBottom ? -1 : 1) * row * stepY;
         const box = {left: x, right: x + width, top: y, bottom: y + height};
-        if (x >= left + collisionGap && y >= top + collisionGap && y + height <= bottom - collisionGap
+        if (x >= left + gap && y >= top + gap && y + height <= bottom - gap
           && targets.every((rect) => !overlaps(box, rect))) position = box;
       }
     }
@@ -320,7 +333,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
         } else if (cause.code === 'wrong_pin') {
           suggestedAction = 'login';
           pin.value = '';
-          pin.focus();
+          pin.focus({preventScroll:true});
         }
       } finally { submitting = false; login.disabled = register.disabled = false; }
     }
@@ -330,8 +343,8 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     actions.append(cancel, register, login);
     card.append(heading, hint, field('Имя или ник', name), field('PIN · 4 цифры', pin), message, actions);
     backdrop.append(card);
-    root.append(backdrop); syncInteraction();
-    name.focus();
+    root.append(backdrop); syncInteraction(); placeLauncher();
+    if (!matchMedia('(pointer: coarse)').matches) name.focus({preventScroll:true});
   }
 
   function showForm({screenshot, selection, error = ''}) {
@@ -370,30 +383,16 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     if (screenshot) preview.src = screenshot;
     else preview.hidden = true;
     const description = document.createElement('textarea');
-    description.placeholder = 'Суть бага, шаги для воспроизведения';
+    description.placeholder = 'Суть бага, шаги для воспроизведения и что ожидалось';
     description.setAttribute('aria-label', description.placeholder);
     description.setAttribute('aria-required', 'true');
-    description.maxLength = 2000;
+    description.maxLength = 4000;
     const descriptionCount = document.createElement('span');
     descriptionCount.className = 'character-count';
     descriptionCount.id = 'bug-kit-description-count';
-    descriptionCount.textContent = '0 / 2000';
+    descriptionCount.textContent = '0 / 4000';
     description.setAttribute('aria-describedby', descriptionCount.id);
-    description.addEventListener('input', () => {
-      descriptionCount.textContent = `${description.value.length} / 2000`;
-    });
-    const expected = document.createElement('textarea');
-    expected.placeholder = 'Что ожидалось';
-    expected.setAttribute('aria-label', expected.placeholder);
-    expected.maxLength = 2000;
-    const expectedCount = document.createElement('span');
-    expectedCount.className = 'character-count';
-    expectedCount.id = 'bug-kit-expected-count';
-    expectedCount.textContent = '0 / 2000';
-    expected.setAttribute('aria-describedby', expectedCount.id);
-    expected.addEventListener('input', () => {
-      expectedCount.textContent = `${expected.value.length} / 2000`;
-    });
+    description.addEventListener('input', () => syncForm());
     const reporter = document.createElement('input');
     reporter.type = 'text';
     reporter.maxLength = 120;
@@ -472,11 +471,112 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     status.className = 'error';
     status.id = 'bug-kit-report-status';
     status.textContent = error;
+    const speechStatus = document.createElement('p');
+    speechStatus.className = 'speech-status';
+    speechStatus.id = 'bug-kit-transcription-status';
+    speechStatus.setAttribute('role', 'status');
+    speechStatus.setAttribute('aria-live', 'polite');
+    speechStatus.setAttribute('aria-atomic', 'true');
+    speechStatus.hidden = true;
+    const speechIcon = document.createElement('span');
+    speechIcon.className = 'speech-icon';
+    speechIcon.setAttribute('aria-hidden', 'true');
+    const speechText = document.createElement('span');
+    speechStatus.append(speechIcon, speechText);
+    const showSpeechStatus = (state = '', text = '') => {
+      speechStatus.hidden = !state;
+      speechStatus.dataset.state = state;
+      speechIcon.textContent = state === 'ready' ? '✓' : '';
+      speechText.textContent = text;
+    };
     const actions = document.createElement('div');
     actions.className = 'row';
+    let submitting = false, transcribing = false, finishing = false, disposedForm = false;
+    let draft = null, recognitionGeneration = 0, pollAbort = null, pollTimer = null, releaseWait = null;
     const cancel = button('Отмена');
-    cancel.onclick = () => { if (status.textContent === 'Отправляем…') return; backdrop.remove(); syncInteraction(); launcher.hidden = false; schedulePlacement(); };
     const send = button('Отправить', 'primary');
+    const retrySpeech = button('Повторить распознавание', 'text-action');
+    retrySpeech.hidden = true;
+    const headersFor = token => ({'Content-Type':'application/json','X-Project-Key':projectKey,
+      ...(token ? {'X-Reporter-Token':token} : {})});
+    const cancelDraft = old => {
+      if (old) fetch(`${base}/api/transcription-drafts/${old.id}/cancel`, {
+        method:'POST',headers:{...headersFor(old.reporterToken),'X-Draft-Token':old.draftToken},keepalive:true,
+      }).catch(()=>{});
+    };
+    const clearRecognition = () => {
+      recognitionGeneration++; pollAbort?.abort(); clearTimeout(pollTimer); releaseWait?.(); releaseWait=null;
+      cancelDraft(draft); draft=null; transcribing=false; retrySpeech.hidden=true; showSpeechStatus();
+    };
+    const syncForm = () => {
+      if (disposedForm) return;
+      const recording = voice.busy();
+      send.textContent = recording ? 'Готово' : 'Отправить';
+      const tooLong = description.value.trim().length > 4000;
+      descriptionCount.textContent = `${description.value.length} / 4000${tooLong ? ' — сократите текст перед отправкой' : ''}`;
+      description.setAttribute('aria-invalid',String(tooLong));
+      send.disabled = submitting || transcribing || finishing || (!recording && (!description.value.trim() || tooLong)) || (reporterAuth && !activeReporter);
+      voice.setDisabled(submitting || transcribing || finishing);
+      retrySpeech.disabled = submitting || transcribing || recording || finishing;
+    };
+    const recognize = async (audio, retry = false) => {
+      if (disposedForm || destroyed || !audio) return;
+      let previous = retry ? draft : null;
+      if (previous) draft=null;
+      clearRecognition();
+      const generation = recognitionGeneration;
+      const current = () => !disposedForm && !destroyed && generation===recognitionGeneration && backdrop.isConnected;
+      transcribing=true; retrySpeech.hidden=true; status.className='meta'; status.textContent=''; showSpeechStatus('pending', 'Идёт расшифровка…'); syncForm();
+      const authToken = reporterAuth ? reporterToken() : '';
+      let active = previous;
+      if (previous) draft=previous;
+      try {
+        // Do not abort creation: a late response must still be cancelled explicitly.
+        // If the connection is lost, the server TTL removes the orphaned draft.
+        let response = await fetch(previous ? `${base}/api/transcription-drafts/${previous.id}/${['pending','processing'].includes(previous.state) ? 'status' : 'retry'}` : `${base}/api/transcription-drafts`,{
+          method:'POST',headers:{...headersFor(authToken),...(previous ? {'X-Draft-Token':previous.draftToken} : {})},
+          body:JSON.stringify(previous ? {} : {audio,pageUrl:safePageUrl()}),
+        });
+        if (previous && response.status===404) {
+          // The TTL can expire while the user edits; retry starts a fresh draft.
+          previous=null;draft=null;
+          response=await fetch(`${base}/api/transcription-drafts`,{method:'POST',headers:headersFor(authToken),body:JSON.stringify({audio,pageUrl:safePageUrl()})});
+        }
+        let result=await response.json();
+        if (!response.ok) throw new Error(result.error || 'Не удалось начать распознавание');
+        active=previous || {id:result.id,draftToken:result.draftToken,reporterToken:authToken};
+        if (!current()) {cancelDraft(active); return;}
+        active.state=result.state;
+        draft=active;
+        pollAbort=new AbortController();
+        while (['pending','processing'].includes(result.state)) {
+          await new Promise(resolve=>{releaseWait=resolve;pollTimer=setTimeout(resolve,500);}); releaseWait=null;
+          if (!current()) return;
+          const poll=await fetch(`${base}/api/transcription-drafts/${active.id}/status`,{
+            method:'POST',headers:{...headersFor(authToken),'X-Draft-Token':active.draftToken},signal:pollAbort.signal,
+          });
+          result=await poll.json();
+          active.state=result.state;
+          if (!poll.ok) throw new Error(result.error || 'Не удалось получить расшифровку');
+          if (!current()) return;
+        }
+        if (result.state!=='ready' || !result.text?.trim()) throw new Error(result.error || 'Не удалось распознать запись. Можно ввести текст вручную.');
+        // Read the live field after ASR, so typing while waiting is preserved.
+        description.value=[description.value,result.text.trim()].filter(Boolean).join('\n\n');
+        showSpeechStatus('ready', 'Расшифровка добавлена. Проверьте текст перед отправкой.');
+      } catch (cause) {
+        if (current()) {showSpeechStatus();status.className='error';status.textContent=cause.message || 'Не удалось распознать запись. Можно ввести текст вручную.';retrySpeech.hidden=false;}
+      } finally {
+        if (current()) {transcribing=false;syncForm();}
+      }
+    };
+    const voice = voiceInput({onChange:()=>{if (voice.busy() && speechStatus.dataset.state==='ready') showSpeechStatus();syncForm();},onReady:audio=>void recognize(audio),
+      onError:error=>{status.className='error';status.textContent=error.message;syncForm();},onClear:()=>{clearRecognition();status.textContent='';syncForm();}});
+    retrySpeech.onclick=()=>void recognize(voice.value(),true);
+    const disposeForm = () => {if (disposedForm) return; disposedForm=true;window.removeEventListener('pagehide',disposeForm);clearRecognition();voice.dispose();};
+    window.addEventListener('pagehide',disposeForm);
+    disposeVoice = disposeForm;
+    cancel.onclick = () => {if(submitting)return;disposeForm();backdrop.remove();syncInteraction();launcher.hidden=false;schedulePlacement();};
     const identity = document.createElement('p');
     identity.className = 'meta reporter-identity';
     const identityName = document.createElement('span');
@@ -487,7 +587,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
         card.inert = false;
         identityName.textContent = `Автор: ${activeReporter.name}`;
         signOut.textContent = 'Выйти';
-        send.disabled = false;
+        syncForm();
         signOut.disabled = false;
         if (send.isConnected) status.textContent = successText;
       }, message, () => { card.inert = false; signOut.disabled = false; });
@@ -502,6 +602,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
           return;
         }
         const token = reporterToken();
+        clearRecognition();
         saveReporterToken('');
         activeReporter = null;
         identityName.textContent = 'Автор: не вошли';
@@ -517,28 +618,44 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     }
     context.append(meta, ...(reporterAuth ? [identity] : []));
     send.onclick = async () => {
-      if (!description.value.trim()) { status.textContent = 'Опишите суть бага'; return; }
+      if (submitting || destroyed || disposedForm || transcribing || finishing) return;
+      if (voice.busy()) {
+        finishing=true;syncForm();status.className='meta';status.textContent='Завершаем запись…';
+        try {await voice.finish();} catch(cause) {if(!disposedForm)status.textContent=cause.message || 'Не удалось прочитать запись';}
+        finally {finishing=false;syncForm();}
+        return;
+      }
+      if (!description.value.trim() || description.value.trim().length>4000) {syncForm();return;}
       if (readingAttachment) { status.textContent = 'Подождите, файл ещё загружается'; return; }
       if (reporterAuth && (!activeReporter || !reporterToken())) { status.textContent = 'Сначала войдите или создайте имя'; return; }
+      submitting = true;
       send.disabled = true;
       cancel.disabled = true;
+      voice.setDisabled(true);
       if (reporterAuth) signOut.disabled = true;
-      status.textContent = 'Отправляем…';
+      status.className='meta';
+      status.textContent = voice.busy() ? 'Завершаем запись…' : 'Отправляем…';
       try {
+        await voice.finish();
+        if (destroyed || !backdrop.isConnected) return;
+        if (!description.value.trim() && !voice.value()) throw new Error('Опишите суть бага или запишите голос');
+        status.textContent = 'Отправляем…';
         const response = await fetch(`${base}/api/reports`, {
           method: 'POST',
           headers: {'Content-Type': 'application/json', 'X-Project-Key': projectKey, ...(reporterAuth ? {'X-Reporter-Token': reporterToken()} : {})},
           body: JSON.stringify({
             title: description.value.trim().split('\n')[0].slice(0, 160),
             description: description.value.trim(),
-            expected: expected.value.trim(),
+            expected: '',
             actual: description.value.trim(),
+            ...(draft ? {transcriptionDraft:{id:draft.id,token:draft.draftToken}} : {}),
             ...(reporterAuth ? {} : {reporterName: reporter.value.trim(), reporterContact: contact.value.trim(), reporterId}),
             pageUrl: safePageUrl(),
             viewport: {width: innerWidth, height: innerHeight, pixelRatio: devicePixelRatio},
             selection,
             screenshot,
             attachment,
+            audio:voice.value(),
             appVersion,
             userAgent: navigator.userAgent,
             diagnostics: recentDiagnostics,
@@ -550,6 +667,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
           activeReporter = null;
           send.disabled = false;
           cancel.disabled = false;
+          voice.setDisabled(false);
           signOut.disabled = true;
           signOut.textContent = 'Войти';
           status.textContent = 'Войдите снова, чтобы отправить баг.';
@@ -557,8 +675,14 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
             'Вход восстановлен. Теперь отправьте баг ещё раз.');
           return;
         }
+        if (response.status===404 && draft) {
+          // The server already discarded the temporary result. Keep original bytes
+          // and the reviewed text; the next send uses the compatible raw-audio API.
+          draft=null;
+          throw new Error('Черновик распознавания истёк. Текст и запись сохранены — нажмите «Отправить» ещё раз.');
+        }
         if (!response.ok) throw new Error(result.error || 'Не удалось отправить');
-        backdrop.remove(); syncInteraction();
+        disposeForm(); backdrop.remove(); syncInteraction();
         launcher.hidden = false;
         schedulePlacement();
         showSuccessToast();
@@ -569,33 +693,33 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
           : cause.message || 'Не удалось отправить';
         send.disabled = false;
         cancel.disabled = false;
+        voice.setDisabled(false);
         if (reporterAuth) signOut.disabled = false;
-      }
+      } finally {submitting = false;syncForm();}
     };
     actions.append(cancel, send);
     const descriptionField = document.createElement('div');
     descriptionField.className = 'report-field';
     descriptionField.append(description);
     descriptionField.append(descriptionCount);
-    const expectedField = document.createElement('div');
-    expectedField.className = 'report-field';
-    expectedField.append(expected);
-    expectedField.append(expectedCount);
     const reportFields = document.createElement('div');
     reportFields.className = 'report-fields';
-    reportFields.append(descriptionField, expectedField);
+    reportFields.append(descriptionField);
     const attachmentControl = document.createElement('div');
     attachmentControl.className = 'report-attachment';
     attachmentControl.append(uploadLabel, uploadName);
     const footer = document.createElement('div');
     footer.className = 'report-footer';
     footer.append(attachmentControl, actions);
-    card.append(header, context, previewFrame,
-      reportFields, ...(reporterAuth ? [] : [field('Кто сообщает', reporter), ...(accountReporterId ? [] : [guestIdLabel]), field('Контакт для уточнений (необязательно)', contact)]),
-      status, footer);
+    const body = document.createElement('div');
+    body.className = 'report-body';
+    voice.element.append(retrySpeech);
+    body.append(previewFrame, voice.element, reportFields,
+      ...(reporterAuth ? [] : [field('Кто сообщает', reporter), ...(accountReporterId ? [] : [guestIdLabel]), field('Контакт для уточнений (необязательно)', contact)]));
+    card.append(header, context, body, speechStatus, status, footer);
     backdrop.append(card);
-    root.append(backdrop); syncInteraction();
-    description.focus();
+    root.append(backdrop); syncInteraction(); placeLauncher(); syncForm();
+    if (!matchMedia('(pointer: coarse)').matches) description.focus({preventScroll:true});
   }
 
   let pendingCapture = null;
@@ -606,7 +730,10 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
       dragState = {id: event.pointerId, x: event.clientX, y: event.clientY,
         rect: launcher.getBoundingClientRect(), moved: false};
     }
-    event.preventDefault(); event.stopPropagation();
+    // WebKit suppresses the touch compatibility click if pointerdown is cancelled.
+    // The synchronous clone still precedes focus/outside handlers; stop their propagation.
+    if (event.pointerType !== 'touch') event.preventDefault();
+    event.stopPropagation();
     // Clone before outside-click/focus handlers dismiss the inspected popup.
     pendingCapture = captureViewport().then(page => ({page}), error => ({error}));
   };
@@ -614,7 +741,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     if (!dragState || event.pointerId !== dragState.id) return;
     const dx = event.clientX - dragState.x;
     const dy = event.clientY - dragState.y;
-    if (!dragState.moved && Math.hypot(dx, dy) < 8) return;
+    if (!dragState.moved && Math.hypot(dx, dy) * (window.visualViewport?.scale || 1) < 8) return;
     dragState.moved = true;
     suppressLauncherClick = true;
     pendingCapture = null;
@@ -622,8 +749,8 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     const viewport = window.visualViewport;
     const left = viewport?.offsetLeft || 0, top = viewport?.offsetTop || 0;
     const right = left + (viewport?.width || innerWidth), bottom = top + (viewport?.height || innerHeight);
-    Object.assign(launcher.style, {left: `${Math.max(left, Math.min(dragState.rect.left + dx, right - launcher.offsetWidth))}px`,
-      top: `${Math.max(top, Math.min(dragState.rect.top + dy, bottom - launcher.offsetHeight))}px`, right: 'auto', bottom: 'auto'});
+    Object.assign(launcher.style, {left: `${Math.max(left, Math.min(dragState.rect.left + dx, right - launcher.getBoundingClientRect().width))}px`,
+      top: `${Math.max(top, Math.min(dragState.rect.top + dy, bottom - launcher.getBoundingClientRect().height))}px`, right: 'auto', bottom: 'auto'});
   };
   const finishLauncherDrag = (event) => {
     if (!dragState || event.pointerId !== dragState.id) return;
@@ -643,6 +770,8 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
   window.addEventListener('pointerup', finishLauncherDrag, true);
   window.addEventListener('pointercancel', finishLauncherDrag, true);
   function prepareCapture() {
+    const viewportBefore = layoutViewport();
+    const onResize = () => {if (layoutViewport().width !== viewportBefore.width) cancel();};
     const layer = document.createElement('div');
     layer.className = 'overlay is-preparing';
     const hint = document.createElement('div');
@@ -656,7 +785,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
       if (finished) return;
       finished = true; layer.remove(); syncInteraction();
       window.removeEventListener('keydown', onKey, true);
-      window.removeEventListener('resize', cancel);
+      window.removeEventListener('resize', onResize);
       if (cancelActiveSelection === cancel) cancelActiveSelection = null;
     };
     const cancel = () => {
@@ -670,7 +799,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     layer.addEventListener('wheel', event => event.preventDefault(), {passive:false});
     close.onclick = cancel;
     window.addEventListener('keydown', onKey, true);
-    window.addEventListener('resize', cancel);
+    window.addEventListener('resize', onResize);
     cancelActiveSelection = cancel;
     return {finish, signal:abort.signal, get cancelled() { return cancelled; }};
   }
@@ -682,12 +811,15 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     pendingCapture = null;
     let capture = await (captured || captureViewport().then(page => ({page}), error => ({error})));
     if (destroyed || preparation.cancelled) { preparation.finish(); return; }
-    if (capture.page && (Number(capture.page.dataset.captureCssWidth) !== innerWidth
-      || Number(capture.page.dataset.captureCssHeight) !== innerHeight)) {
+    if (capture.page && (Number(capture.page.dataset.captureCssWidth) !== layoutViewport().width
+      || Number(capture.page.dataset.captureCssHeight) !== layoutViewport().height
+      || Number(capture.page.dataset.captureScrollX) !== scrollX || Number(capture.page.dataset.captureScrollY) !== scrollY)) {
       capture = await captureViewport().then(page => ({page}), error => ({error}));
     }
     preparation.finish();
     if (destroyed || preparation.cancelled) return;
+    const bounds = capture.page ? {width:Number(capture.page.dataset.captureCssWidth),height:Number(capture.page.dataset.captureCssHeight)} : layoutViewport();
+    const onResize = () => {if (layoutViewport().width !== bounds.width) cancelSelection();};
     const overlay = document.createElement('div');
     overlay.className = 'overlay';
     // The displayed frame is frozen; scrolling its hidden page would cause a
@@ -696,23 +828,28 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     const hint = document.createElement('div');
     hint.className = 'hint';
     hint.textContent = 'Выделите область мышью · Esc — отмена';
-    const close = button('Отмена', 'selection-cancel');
     const box = document.createElement('div');
     box.className = 'box';
+    // In iOS Safari a fixed layer's client rect can move with the visual viewport.
+    // Anchor the captured image at client0, then keep that image origin for crop input.
+    let imageOrigin = {x:0,y:0};
     if (capture.page) {
-      const frozen = document.createElement('canvas');
-      frozen.width = capture.page.width; frozen.height = capture.page.height;
-      frozen.getContext('2d').drawImage(capture.page, 0, 0);
-      Object.assign(frozen.style, {position:'absolute', inset:'0', width:'100%', height:'100%', pointerEvents:'none'});
+      // The renderer already owns an immutable bitmap; avoid a second full-size buffer.
+      const frozen = capture.page;
+      Object.assign(frozen.style, {position:'absolute',left:'0',top:'0',width:`${bounds.width}px`,height:`${bounds.height}px`,pointerEvents:'none'});
       overlay.append(frozen);
     }
-    overlay.append(hint, close, box);
+    overlay.append(hint, box);
     root.append(overlay); syncInteraction();
-    let start = null;
+    const layerRect = overlay.getBoundingClientRect();
+    imageOrigin = {x:-layerRect.left,y:-layerRect.top};
+    const frozenImage = overlay.querySelector('canvas');
+    if (frozenImage) Object.assign(frozenImage.style,{left:`${imageOrigin.x}px`,top:`${imageOrigin.y}px`});
     const finishSelection = () => {
+      controls?.dispose();
       overlay.remove(); syncInteraction();
       window.removeEventListener('keydown', onKey, true);
-      window.removeEventListener('resize', cancelSelection);
+      window.removeEventListener('resize', onResize);
       cancelActiveSelection = null;
     };
     const cancelSelection = () => {
@@ -722,39 +859,17 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     const onKey = (event) => {
       // Block shortcuts while the frame is frozen. Earlier application capture
       // listeners must honor the public active marker on the widget host.
-      event.preventDefault();
-      event.stopImmediatePropagation();
+      const ownControl = overlay.contains(event.composedPath()[0]);
+      if (ownControl && ['Tab','ArrowLeft','ArrowRight','ArrowUp','ArrowDown',' '].includes(event.key)) return;
+      if (event.key === 'Enter' && event.composedPath()[0]?.tagName === 'BUTTON') return;
+      event.preventDefault(); event.stopImmediatePropagation();
       if (event.key === 'Escape') cancelSelection();
+      if (event.key === 'Enter') controls.confirm();
     };
-    close.onclick = cancelSelection;
-    close.onpointerdown = (event) => event.stopPropagation();
     window.addEventListener('keydown', onKey, true);
-    // A frozen viewport cannot be stretched to new dimensions without corrupting crop coordinates.
-    window.addEventListener('resize', cancelSelection);
-    overlay.onpointerdown = (event) => {
-      if (event.button !== 0) return;
-      start = {x: event.clientX, y: event.clientY};
-      overlay.setPointerCapture(event.pointerId);
-    };
-    overlay.onpointermove = (event) => {
-      if (!start) return;
-      const x = Math.min(start.x, event.clientX), y = Math.min(start.y, event.clientY);
-      Object.assign(box.style, {
-        left: `${x}px`, top: `${y}px`,
-        width: `${Math.abs(event.clientX - start.x)}px`,
-        height: `${Math.abs(event.clientY - start.y)}px`,
-      });
-    };
-    overlay.onpointerup = async (event) => {
-      if (!start) return;
-      const selection = {
-        x: Math.max(0, Math.min(start.x, event.clientX)),
-        y: Math.max(0, Math.min(start.y, event.clientY)),
-        width: Math.abs(event.clientX - start.x),
-        height: Math.abs(event.clientY - start.y),
-      };
-      start = null;
-      if (selection.width < 24 || selection.height < 24) return;
+    // Width changes reflow the page. Browser toolbar height changes keep the exact frozen bitmap.
+    window.addEventListener('resize', onResize);
+    const controls = selectionControls(overlay, box, hint, async (selection) => {
       finishSelection();
       try {
         if (capture.error) throw capture.error;
@@ -772,7 +887,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
       } catch (cause) {
         showForm({screenshot: null, selection, error: `Снимок не получился: ${cause.message}. Файл можно приложить отдельно.`});
       }
-    };
+    }, cancelSelection, () => {finishSelection(); showForm({screenshot:null, selection:null});}, bounds, imageOrigin);
   }
   launcher.onclick = async (event) => {
     event.stopPropagation();
@@ -806,9 +921,11 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
       if (!destroyed && !preparation.cancelled) showAuth(beginSelection, 'Нет связи с сервером. Попробуйте войти ещё раз.');
     } finally { preparation.finish(); launcher.disabled = false; }
   };
-  return {recordDiagnostic: addDiagnostic, destroy: () => {
+  const instance = {recordDiagnostic: addDiagnostic, destroy: () => {
+    if (destroyed) return;
     destroyed = true;
     cancelActiveSelection?.();
+    disposeVoice();
     clearToast();
     window.removeEventListener('pointerdown', captureBeforeDismiss, true);
     window.removeEventListener('pointermove', moveLauncher, true);
@@ -825,12 +942,15 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     window.removeEventListener('unhandledrejection', onRejection);
     if (observedFetch && window.fetch === observedFetch) window.fetch = originalFetch;
     host.remove();
+    if (window.BugReportKit?.instance === instance) delete window.BugReportKit.instance;
   }};
+  return instance;
 }
 
-window.BugReportKit = {init};
+// Repeated SPA embeds keep the live instance and its unfinished report.
+window.BugReportKit = {...window.BugReportKit, init};
 const script = document.currentScript;
-if (script?.dataset.projectKey) {
+if (script?.dataset.projectKey && !window.BugReportKit.instance) {
   window.BugReportKit.instance = init({
     serverUrl: script.dataset.serverUrl || new URL(script.src).origin,
     projectKey: script.dataset.projectKey,
