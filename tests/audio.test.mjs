@@ -17,7 +17,7 @@ test('audio is independent, private, durable and transcribed without overwriting
   const directory=mkdtempSync(join(tmpdir(),'kit-audio-')); t.after(()=>rmSync(directory,{recursive:true,force:true}));
   const transcriber=join(directory,'transcribe.mjs');
   writeFileSync(transcriber,"import{writeFileSync}from'node:fs';writeFileSync(process.argv[3],'Проверка голосового сообщения');");
-  const config={projects:[{id:'audio',widgetKey:'audio-key',allowedOrigins:['https://fixture.test']}],teamTokens:[{name:'Developer',role:'developer',token:'dev',projects:['audio']},{name:'Other',role:'developer',token:'other',projects:['other']}],transcription:{command:[process.execPath,transcriber]}};
+  const config={projects:[{id:'audio',voiceEnabled:true,widgetKey:'audio-key',allowedOrigins:['https://fixture.test']}],teamTokens:[{name:'Developer',role:'developer',token:'dev',projects:['audio']},{name:'Other',role:'developer',token:'other',projects:['other']}],transcription:{command:[process.execPath,transcriber]}};
   const app=createApp(config,{rootDir:directory});
   await new Promise(r=>app.server.listen(0,'127.0.0.1',r));
   t.after(async()=>{await new Promise(r=>app.server.close(r));app.db.close();});

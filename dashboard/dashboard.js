@@ -201,7 +201,7 @@ async function showReport(id) {
     const transcription = selected.transcription || {};
     const labels = {pending:'В очереди распознавания',processing:'Распознаём запись на сервере',ready:'',failed:'Не удалось распознать',unavailable:'Распознавание не настроено'};
     textBlock(voice, 'Расшифровка (автоматическая)', transcription.text || transcription.error || labels[transcription.state]);
-    if (['failed','unavailable'].includes(transcription.state)) actionButton(voice, 'Повторить распознавание', async () => {
+    if (selected.voiceEnabled === true && ['failed','unavailable'].includes(transcription.state)) actionButton(voice, 'Повторить распознавание', async () => {
       try {await api(`/api/reports/${id}/transcription`, {method:'POST'}); await showReport(id);}
       catch (error) {message(error.message, true);}
     });

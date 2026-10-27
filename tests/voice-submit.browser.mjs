@@ -16,12 +16,12 @@ async function fixture(t, engine=chromium, speech={}, sameOrigin=false) {
       upstream.on('error',()=>{res.writeHead(502);res.end();});req.pipe(upstream);return;
     }
     const publicBase=sameOrigin ? origin : kitBase;
-    res.setHeader('Content-Type','text/html');res.end(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><body><h1>TEST synthetic voice</h1><script src="${publicBase}/widget.js" data-server-url="${publicBase}" data-project-key="fixture"></script>`);
+    res.setHeader('Content-Type','text/html');res.end(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><body><h1>TEST synthetic voice</h1><script src="${publicBase}/widget.js" data-server-url="${publicBase}" data-project-key="fixture" data-voice-enabled="${speech.voiceEnabled === false ? 'false' : 'true'}"></script>`);
   });
   await new Promise(r=>site.listen(0,'127.0.0.1',r));
   const origin=`http://127.0.0.1:${site.address().port}`;
   const script=join(directory,'asr.mjs');writeFileSync(script,`import{writeFileSync}from'node:fs';setTimeout(()=>${speech.fail ? 'process.exit(1)' : `writeFileSync(process.argv[3],${JSON.stringify(speech.text || 'TEST распознанные слова')})`},${speech.delay || 60});`);
-  const app=createApp({transcription:{command:[process.execPath,script]},projects:[{id:directory,widgetKey:'fixture',allowedOrigins:[origin]}],teamTokens:[{token:'fixture-developer',role:'developer',projects:[directory]}]},{rootDir:process.cwd(),database:join(directory,'reports.sqlite')});
+  const app=createApp({transcription:{command:[process.execPath,script]},projects:[{id:directory,voiceEnabled:speech.voiceEnabled !== false,widgetKey:'fixture',allowedOrigins:[origin]}],teamTokens:[{token:'fixture-developer',role:'developer',projects:[directory]}]},{rootDir:process.cwd(),database:join(directory,'reports.sqlite')});
   await new Promise(r=>app.server.listen(0,'127.0.0.1',r));kitBase=`http://127.0.0.1:${app.server.address().port}`;
   const browser=await engine.launch(engine===chromium?{headless:true,args:['--use-fake-ui-for-media-stream','--use-fake-device-for-media-stream']}:{headless:true});
   t.after(async()=>{await browser.close();await new Promise(r=>site.close(r));await new Promise(r=>app.server.close(r));app.db.close();rmSync(directory,{recursive:true,force:true});});
@@ -54,6 +54,26 @@ async function fixture(t, engine=chromium, speech={}, sameOrigin=false) {
   const done=async()=>{await page.getByRole('button',{name:'Готово',exact:true}).click();await ready();};
   return {page,open,recording,post,kitBase,auth,ready,done,app,script};
 }
+
+for(const [name,engine] of Object.entries({chromium,webkit})) test(`text-only opt-out keeps one editable field and never requests a microphone (${name})`,async t=>{
+  const {page,open,post,kitBase,auth,app}=await fixture(t,engine,{voiceEnabled:false});
+  await page.evaluate(()=>{window.microphoneCalls=0;navigator.mediaDevices.getUserMedia=()=>{window.microphoneCalls++;throw new Error('text-only must not request audio');};});
+  await open();
+  assert.equal(await page.locator('.voice-input').count(),0);
+  assert.equal(await page.locator('textarea').count(),1);
+  assert.equal(await page.locator('#bug-kit-transcription-status').isVisible(),false);
+  const send=page.getByRole('button',{name:'Отправить',exact:true});assert.equal(await send.isEnabled(),false);
+  const input=page.getByPlaceholder('Суть бага, шаги для воспроизведения и что ожидалось');
+  await input.fill('   ');assert.equal(await send.isEnabled(),false);
+  const description='Текст, в том числе из диктовки клавиатуры. '.repeat(20);
+  await input.fill(description);assert.equal(await send.isEnabled(),true);
+  const posted=post();await send.click();const response=await posted;
+  assert.equal(response.status(),201);assert.equal(response.request().postDataJSON().audio,null);
+  const {id}=await response.json();const report=await(await fetch(kitBase+`/api/reports/${id}`,{headers:auth})).json();
+  assert.equal(report.description,description.trim());assert.equal(report.audioAvailable,false);assert.equal(report.voiceEnabled,false);
+  assert.equal(await page.evaluate(()=>microphoneCalls),0);
+  assert.equal(app.db.prepare('SELECT count(*) AS n FROM transcription_drafts').get().n,0);
+});
 
 test('voice controls and footer remain stationary through recording, preview and content scrolling',async t=>{
   const {page,open,recording}=await fixture(t);await open(true);

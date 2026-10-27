@@ -14,7 +14,7 @@ async function setup(t,{auth=false,script,other=false}={}) {
  const transcriber=join(dir,'asr.mjs');
  const count=join(dir,'runs');
  writeFileSync(transcriber,script || `import{writeFileSync,appendFileSync}from'node:fs';appendFileSync(${JSON.stringify(count)},'x');writeFileSync(process.argv[3],'Машинный текст');`);
- const app=createApp({reporterAuthSecret:'TEST-only-isolated-fixture-secret-32-bytes',projects:[{id:dir,widgetKey:dir,allowedOrigins:[origin],reporterAuth:auth},...(other?[{id:dir+'other',widgetKey:dir+'other',allowedOrigins:[origin]}]:[])],teamTokens:[{token:'dev',projects:[dir]}],transcription:{command:[process.execPath,transcriber],timeoutMs:1000}},{rootDir:dir});
+ const app=createApp({reporterAuthSecret:'TEST-only-isolated-fixture-secret-32-bytes',projects:[{id:dir,voiceEnabled:true,widgetKey:dir,allowedOrigins:[origin],reporterAuth:auth},...(other?[{id:dir+'other',voiceEnabled:true,widgetKey:dir+'other',allowedOrigins:[origin]}]:[])],teamTokens:[{token:'dev',projects:[dir]}],transcription:{command:[process.execPath,transcriber],timeoutMs:1000}},{rootDir:dir});
  await new Promise(r=>app.server.listen(0,'127.0.0.1',r));
  t.after(async()=>{await new Promise(r=>app.server.close(r));app.db.close();rmSync(dir,{recursive:true,force:true});});
  const base=`http://127.0.0.1:${app.server.address().port}`;

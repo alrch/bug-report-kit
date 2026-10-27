@@ -7,7 +7,11 @@ import {withSpeechProfile} from '../server/speech-config.mjs';
 
 test('speech image opt-in requires prepared assets and preserves explicit project commands',t=>{
   const root=mkdtempSync(join(tmpdir(),'kit-speech-profile-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
-  const config={projects:[{id:'TEST'}]};assert.equal(withSpeechProfile(config,{env:{},rootDir:root}),config);
+  const config={projects:[{id:'TEST',voiceEnabled:true}]};assert.equal(withSpeechProfile(config,{env:{},rootDir:root}),config);
+  const disabled={projects:[{id:'TEST',voiceEnabled:false}]};
+  assert.equal(withSpeechProfile(disabled,{env:{BUG_KIT_SPEECH_ENABLED:'1'},rootDir:root}),disabled);
+  const legacy={projects:[{id:'TEST'}]};
+  assert.equal(withSpeechProfile(legacy,{env:{BUG_KIT_SPEECH_ENABLED:'1'},rootDir:root}),legacy);
   const explicit={...config,transcription:{command:['TEST-owned-transcriber']}};
   assert.equal(withSpeechProfile(explicit,{env:{BUG_KIT_SPEECH_ENABLED:'1'},rootDir:root}),explicit);
   assert.throws(()=>withSpeechProfile(config,{env:{BUG_KIT_SPEECH_ENABLED:'1'},rootDir:root}),/prepared/);

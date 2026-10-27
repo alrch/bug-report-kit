@@ -1,7 +1,9 @@
 const MAX_BYTES = 5 * 1024 * 1024;
 const MAX_SECONDS = 120;
-export function voiceInput({onChange = () => {}, onReady = () => {}, onError = () => {}, onClear = () => {}} = {}) {
+export function voiceInput({enabled = false, onChange = () => {}, onReady = () => {}, onError = () => {}, onClear = () => {}} = {}) {
   const element = document.createElement('section'); element.className = 'voice-input';
+  if (enabled !== true) return {element, value:()=>null, busy:()=>false,
+    finish:async()=>null, setDisabled() {}, dispose() {}};
   element.setAttribute('role','group'); element.setAttribute('aria-label','Голосовое описание');
   const record = document.createElement('button'); record.type = 'button'; record.className = 'voice-record';
   const micIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/></svg>';
