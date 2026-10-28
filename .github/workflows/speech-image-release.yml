@@ -8,6 +8,7 @@ on:
       - 'Dockerfile'
       - 'scripts/**'
       - 'server/**'
+      - 'runtime/**'
       - 'shared/**'
       - 'widget/**'
       - 'package.json'
