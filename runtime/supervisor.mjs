@@ -2,7 +2,7 @@ import { setTimeout as pause } from 'node:timers/promises';
 
 // Own only the passed child and servers. In particular, never kill a listener
 // discovered by port number: a conflict must leave the existing process intact.
-export function supervise({ child, servers, probe, intervalMs = 30_000, timeoutMs = 5000,
+export function supervise({ child, servers, probe = null, intervalMs = 30_000, timeoutMs = 5000,
   failureLimit = 3, graceMs = 5000, log = console.log, exit = code => { process.exitCode = code; } }) {
   let stopping = false, failures = 0, finalCode = 0;
   const controller = new AbortController();
@@ -32,7 +32,10 @@ export function supervise({ child, servers, probe, intervalMs = 30_000, timeoutM
   const term = () => stop('SIGTERM', 0), interrupt = () => stop('SIGINT', 0);
   process.once('SIGTERM', term); process.once('SIGINT', interrupt);
   const health = (async () => {
-    while (!stopping) {
+    // An adapter can share child/listener ownership while its enclosing common
+    // runner performs the single set of health probes from the instance manifest.
+    if (!probe && !stopping) await new Promise(accept => controller.signal.addEventListener('abort', accept, { once: true }));
+    while (probe && !stopping) {
       try { await pause(intervalMs, undefined, { signal: controller.signal }); }
       catch { break; }
       try {

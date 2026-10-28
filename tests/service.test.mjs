@@ -47,6 +47,13 @@ test('Shared watchdog recovers transient health and kills a stuck child after it
   assert.equal(attempts, 5); assert.equal(code, 1); assert.ok(events.some(event => event.event === 'health-recovered'));
 });
 
+test('An adapter can delegate child ownership without creating a second health watchdog', async t => {
+  const child = childFixture(t); let code;
+  const runtime = supervise({ child, servers: [], log: () => {}, exit: value => { code = value; } });
+  const exited = once(child, 'exit'); runtime.stop('fixture-finished', 0); await exited; await runtime.health;
+  assert.equal(code, 0);
+});
+
 test('Per-instance manifests reject external probes and inherited non-Kit credentials', t => {
   const spec = specification(t), env = serviceEnvironment(spec);
   assert.ok(!('OPENAI_API_KEY' in env)); assert.ok(!('NODE_OPTIONS' in env));
