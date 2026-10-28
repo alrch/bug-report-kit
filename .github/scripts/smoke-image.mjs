@@ -6,6 +6,8 @@ const base = 'http://127.0.0.1:7337';
 const routes = [
   ['/healthz', 'application/json'],
   ['/loader.js', 'application/javascript'],
+  ['/client.mjs', 'application/javascript'],
+  ['/client.d.mts', 'application/javascript'],
   ['/widget.js', 'application/javascript'],
   ['/widget.css', 'text/css'],
 ];

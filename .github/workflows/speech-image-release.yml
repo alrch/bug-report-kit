@@ -92,6 +92,12 @@ jobs:
       - name: Install and test source
         working-directory: source
         run: npm ci && npm test && npm run build
+      - name: Verify shared client and existing embed in Chromium
+        working-directory: source
+        run: |
+          npx playwright install --with-deps chromium
+          node --test tests/client.browser.mjs tests/lifecycle.browser.mjs tests/voice-selection.browser.mjs
+          node --test --test-name-pattern='early loader lifecycle \(chromium\)' tests/loader.browser.mjs
       - name: Install synthetic speech generator
         if: steps.source.outputs.target == 'speech'
         run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends espeak-ng
