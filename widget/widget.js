@@ -573,8 +573,9 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     const voice = voiceInput({enabled:voiceEnabled === true,onChange:()=>{if (voice.busy() && speechStatus.dataset.state==='ready') showSpeechStatus();syncForm();},onReady:audio=>void recognize(audio),
       onError:error=>{status.className='error';status.textContent=error.message;syncForm();},onClear:()=>{clearRecognition();status.textContent='';syncForm();}});
     retrySpeech.onclick=()=>void recognize(voice.value(),true);
-    const disposeForm = () => {if (disposedForm) return; disposedForm=true;window.removeEventListener('pagehide',disposeForm);clearRecognition();voice.dispose();};
-    window.addEventListener('pagehide',disposeForm);
+    const disposeForm = () => {if (disposedForm) return; disposedForm=true;window.removeEventListener('pagehide',onFormPageHide);clearRecognition();voice.dispose();};
+    const onFormPageHide = event => {if (!event.persisted) disposeForm();};
+    window.addEventListener('pagehide',onFormPageHide);
     disposeVoice = disposeForm;
     cancel.onclick = () => {if(submitting)return;disposeForm();backdrop.remove();syncInteraction();launcher.hidden=false;schedulePlacement();};
     const identity = document.createElement('p');

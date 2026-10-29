@@ -232,7 +232,7 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
         db.prepare('SELECT 1 AS ok').get();
         return json(res, 200, {ok: true});
       }
-      if (req.method === 'GET' && ['/widget.js', '/loader.js', '/loading-ui.mjs'].includes(url.pathname)) {
+      if (req.method === 'GET' && ['/widget.js', '/loader.js', '/client.mjs', '/client.d.mts', '/loading-ui.mjs'].includes(url.pathname)) {
         const path = url.pathname === '/loading-ui.mjs'
           ? resolve(import.meta.dirname, '../widget/loading-ui.js')
           : resolve(rootDir, 'dist', url.pathname.slice(1));

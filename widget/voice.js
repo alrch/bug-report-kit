@@ -26,7 +26,7 @@ export function voiceInput({enabled = false, onChange = () => {}, onReady = () =
   const controls = document.createElement('div'); controls.className = 'voice-controls';
   controls.append(record, status, remove); element.append(controls, preview);
   let recorder, stream, timer, watchdog, chunks = [], bytes = 0, data = null, url = '', disposed = false, pending = false, reading = false, disabled = false;
-  let completion = null, completionError = null, complete = () => {}, finishRequested = false;
+  let completion = null, completionError = null, complete = () => {}, finishRequested = false, permissionGeneration = 0;
   const supports = window.isSecureContext && navigator.mediaDevices?.getUserMedia && window.MediaRecorder;
   if (!supports) {record.disabled = true; status.textContent = 'Запись недоступна в этом браузере. Введите текст или используйте диктовку клавиатуры.';}
   const stopTracks = () => {stream?.getTracks().forEach(track => track.stop()); stream = null;};
@@ -35,12 +35,22 @@ export function voiceInput({enabled = false, onChange = () => {}, onReady = () =
     data = null; if (url) URL.revokeObjectURL(url); url = ''; preview.removeAttribute('src'); preview.hidden = true; remove.hidden = true;
   };
   const stop = () => {if (recorder?.state === 'recording') {reading = true; recorder.stop();} clearTimers(); stopTracks(); onChange();};
-  const onPageHide = () => stop();
+  const onPageHide = () => {
+    ++permissionGeneration;
+    if (pending) {
+      pending = false;
+      complete(new Error('Запись отменена'));
+      status.textContent = idleStatus;
+      record.disabled = disabled || !supports || disposed;
+    }
+    stop();
+  };
   window.addEventListener('pagehide', onPageHide);
   remove.onclick = () => {if (!disabled) {reset(); recordLabel('Записать голос'); status.textContent = idleStatus; onClear(); onChange();}};
   record.onclick = async () => {
     if (disabled || pending || reading) return;
     if (recorder?.state === 'recording') {stop(); return;}
+    const permissionRun = ++permissionGeneration;
     pending = true; onChange(); record.disabled = true; status.textContent = 'Разрешите доступ к микрофону';
     completionError = null; finishRequested = false;
     // Resolve rather than reject here: only finish() consumes errors; ordinary
@@ -49,9 +59,10 @@ export function voiceInput({enabled = false, onChange = () => {}, onReady = () =
       let settled = false;
       complete = error => {if (settled) return; settled = true; completionError = error || null; resolve();};
     });
+    const settlePermission = complete;
     try {
       const next = await navigator.mediaDevices.getUserMedia({audio:true});
-      if (disposed) {next.getTracks().forEach(t=>t.stop()); complete(new Error('Запись отменена')); return;}
+      if (disposed || permissionRun !== permissionGeneration) {next.getTracks().forEach(t=>t.stop()); settlePermission(new Error('Запись отменена')); return;}
       stream = next;
       const mime = ['audio/webm;codecs=opus','audio/mp4','audio/ogg;codecs=opus','audio/webm'].find(type => MediaRecorder.isTypeSupported(type));
       if (!mime) throw new Error('Формат записи не поддерживается. Используйте текст или диктовку клавиатуры.');
@@ -95,10 +106,11 @@ export function voiceInput({enabled = false, onChange = () => {}, onReady = () =
       const tick = () => {const seconds = Math.floor((Date.now()-started)/1000); status.textContent = `Идёт запись: ${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')} / 2:00`;};
       tick(); timer = setInterval(tick, 1000); watchdog = setTimeout(stop, MAX_SECONDS * 1000);
     } catch (error) {
+      if (disposed || permissionRun !== permissionGeneration) {settlePermission(new Error('Запись отменена'));return;}
       stopTracks(); status.textContent = error.name === 'NotAllowedError' ? 'Доступ к микрофону не разрешён. Можно ввести текст или включить доступ в настройках браузера.' : error.message || 'Не удалось включить микрофон';
       if (data) {preview.hidden = false; remove.hidden = false;}
       complete(new Error(status.textContent)); onError(new Error(status.textContent));
-    } finally {pending = false; record.disabled = disabled || !supports || disposed || reading; onChange();}
+    } finally {if (permissionRun === permissionGeneration) {pending = false; record.disabled = disabled || !supports || disposed || reading; onChange();}}
   };
   return {
     element, value:()=>data, busy:()=>pending || reading || recorder?.state === 'recording',
