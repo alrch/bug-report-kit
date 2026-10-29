@@ -17,10 +17,12 @@ COPY dashboard dashboard
 COPY widget/widget.css widget/widget.css
 COPY widget/loading-ui.js widget/loading-ui.js
 COPY scripts/backup.mjs scripts/backup.mjs
+COPY scripts/service.mjs scripts/service.mjs
+COPY runtime runtime
 RUN mkdir -p data && chown node:node data
 USER node
 EXPOSE 7337
-CMD ["node", "server/index.mjs"]
+CMD ["node", "scripts/service.mjs", "foreground"]
 
 # Keep Python/model layers independent of application source for repeatable updates.
 FROM node:24-bookworm-slim AS speech-deps
@@ -37,7 +39,7 @@ RUN chown node:node /app/data
 ENV NODE_ENV=production BUG_KIT_SPEECH_ENABLED=1 BUG_KIT_SPEECH_PYTHON=/opt/bug-kit/speech/bin/python BUG_KIT_SPEECH_MODEL=/opt/bug-kit/models/small BUG_KIT_SPEECH_LANGUAGE=ru HF_HUB_OFFLINE=1
 USER node
 EXPOSE 7337
-CMD ["node", "server/index.mjs"]
+CMD ["node", "scripts/service.mjs", "foreground"]
 
 # Preserve the lightweight default build for existing non-speech installations.
 FROM base AS runtime

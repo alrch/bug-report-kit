@@ -1,6 +1,6 @@
 {
   "name": "bug-report-kit",
-  "version": "0.4.1",
+  "version": "0.4.3",
   "private": true,
   "type": "module",
   "description": "Self-hosted visual bug reports for web projects",
@@ -9,7 +9,9 @@
   },
   "scripts": {
     "build": "node scripts/build-widget.mjs",
-    "start": "node server/index.mjs",
+    "start": "node scripts/service.mjs foreground",
+    "service:install": "node scripts/service.mjs install",
+    "test:service:macos": "node scripts/smoke-service-macos.mjs",
     "test": "node --test tests/*.test.mjs",
     "test:browser": "npm run build && node --test tests/*.browser.mjs",
     "test:launcher": "npm run build && node --test tests/launcher.browser.mjs"
