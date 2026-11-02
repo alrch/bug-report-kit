@@ -97,7 +97,7 @@ jobs:
         working-directory: source
         run: |
           npx playwright install --with-deps chromium
-          node --test tests/client.browser.mjs tests/lifecycle.browser.mjs tests/voice-selection.browser.mjs
+          node --test tests/client.browser.mjs tests/lifecycle.browser.mjs tests/voice-selection.browser.mjs tests/reporter-roles.browser.mjs
           node --test --test-name-pattern='early loader lifecycle \(chromium\)' tests/loader.browser.mjs
       - name: Install synthetic speech generator
         if: steps.source.outputs.target == 'speech'

@@ -28,7 +28,7 @@ test('reporter creates a report; team reads, updates, and views HTML', async (t)
     app.db.close();
   });
   const base = `http://127.0.0.1:${app.server.address().port}`;
-  assert.deepEqual(await (await fetch(`${base}/healthz`)).json(), {ok: true});
+  assert.deepEqual(await (await fetch(`${base}/healthz`)).json(), {ok: true, reporterAccessPolicyVersion: 1});
   const preflight = await fetch(`${base}/api/reports`, {method: 'OPTIONS', headers: {
     Origin: 'http://localhost:7338', 'Access-Control-Request-Method': 'POST',
     'Access-Control-Request-Headers': 'content-type,x-project-key,x-request-id',

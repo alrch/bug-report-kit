@@ -17,6 +17,7 @@ COPY dashboard dashboard
 COPY widget/widget.css widget/widget.css
 COPY widget/loading-ui.js widget/loading-ui.js
 COPY scripts/backup.mjs scripts/backup.mjs
+COPY scripts/panel-access.mjs scripts/panel-access.mjs
 COPY scripts/service.mjs scripts/service.mjs
 COPY runtime runtime
 RUN mkdir -p data && chown node:node data

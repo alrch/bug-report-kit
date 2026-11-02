@@ -11,6 +11,7 @@
       "widgetKey": "replace-with-random-public-key",
       "voiceEnabled": false,
       "reporterAuth": true,
+      "reporterRegistration": true,
       "panelAccess": true,
       "allowedOrigins": ["http://localhost:7338"],
       "repositories": [

@@ -1,3 +1,5 @@
+import {readJsonResponse} from '/http-response.mjs';
+
 const $ = (selector) => document.querySelector(selector);
 let token = sessionStorage.getItem('bug-kit-panel-token') || '';
 let selected = null;
@@ -16,7 +18,7 @@ async function api(path, options = {}) {
     headers: {Authorization: `Bearer ${token}`, ...(options.body ? {'Content-Type': 'application/json'} : {})},
   });
   if (response.status === 401) throw new Error('Сессия завершилась. Войдите снова.');
-  if (!response.ok) throw new Error((await response.json()).error || 'Ошибка сервера');
+  if (!response.ok) throw new Error((await readJsonResponse(response)).error || 'Ошибка сервера');
   return response;
 }
 
@@ -304,16 +306,16 @@ async function enter() {
 async function loadLoginProjects() {
   const response = await fetch('/api/panel/projects');
   if (!response.ok) throw new Error('Не удалось загрузить проекты');
-  const projects = await response.json();
+  const projects = await readJsonResponse(response);
   const select = $('#login-project');
   select.replaceChildren();
   for (const project of projects) select.add(new Option(project.name, project.id));
   $('#login-project-field').hidden = projects.length <= 1;
-  $('#login-button').disabled = $('#register-button').disabled = !projects.length;
+  $('#login-button').disabled = !projects.length;
   if (!projects.length) $('#login-error').textContent = 'Для входа по PIN включите panelAccess в настройках проекта.';
 }
 
-async function signIn(mode) {
+async function signIn() {
   $('#login-error').textContent = '';
   const body = {projectId: $('#login-project').value, name: $('#login-name').value.trim(),
     pin: $('#login-pin').value};
@@ -321,17 +323,17 @@ async function signIn(mode) {
     $('#login-error').textContent = 'Укажите имя и PIN из четырёх цифр.';
     return;
   }
-  $('#login-button').disabled = $('#register-button').disabled = true;
+  $('#login-button').disabled = true;
   try {
-    const response = await fetch(`/api/panel/${mode}`, {method: 'POST',
+    const response = await fetch('/api/panel/login', {method: 'POST',
       headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
-    const result = await response.json();
+    const result = await readJsonResponse(response);
     if (!response.ok) throw new Error(result.error || 'Не удалось войти');
     token = result.token;
     $('#login-pin').value = '';
     await enter();
   } catch (error) { $('#login-error').textContent = error.message; }
-  finally { $('#login-button').disabled = $('#register-button').disabled = false; }
+  finally { $('#login-button').disabled = false; }
 }
 
 function summaryQuery() {
@@ -341,9 +343,8 @@ function summaryQuery() {
   return query;
 }
 
-$('#login-button').onclick = () => signIn('login');
-$('#register-button').onclick = () => signIn('register');
-$('#login-pin').onkeydown = (event) => { if (event.key === 'Enter') void signIn('login'); };
+$('#login-button').onclick = () => signIn();
+$('#login-pin').onkeydown = (event) => { if (event.key === 'Enter') void signIn(); };
 $('#refresh').onclick = () => loadList().catch((error) => message(error.message, true));
 $('#project').onchange = $('#filter').onchange = () => { offset = 0; void loadList().catch((error) => message(error.message, true)); };
 $('#previous').onclick = () => { offset = Math.max(0, offset - 100); void loadList().catch((error) => message(error.message, true)); };
