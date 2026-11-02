@@ -3,6 +3,7 @@ import {selectionControls} from './selection.js';
 import {voiceInput} from './voice.js';
 import {captureViewport, safePageUrl} from './capture.js';
 import {openScreenshotPreview} from './preview.js';
+import {readJsonResponse} from '../shared/http-response.mjs';
 
 const button = (label, className = '') => {
   const node = document.createElement('button');
@@ -247,7 +248,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     heading.textContent = 'Кто сообщает о баге?';
     const hint = document.createElement('p');
     hint.className = 'meta';
-    hint.textContent = 'Войдите со своим именем или создайте новое. PIN — 4 цифры.';
+    hint.textContent = 'Войдите со своим именем или создайте новое. PIN — 4 цифры. Регистрация позволяет отправлять баги; общая очередь доступна только сопровождающим.';
     const name = document.createElement('input');
     name.type = 'text'; name.maxLength = 80; name.autocomplete = 'username';
     name.placeholder = 'Имя или ник';
@@ -304,7 +305,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
           method: 'POST', headers: {'Content-Type': 'application/json', 'X-Project-Key': projectKey},
           body: JSON.stringify({name: enteredName, pin: pin.value}),
         });
-        const result = await response.json();
+        const result = await readJsonResponse(response);
         if (!response.ok) {
           const failure = new Error(result.error || 'Не удалось войти');
           failure.code = result.code;
@@ -662,7 +663,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
             diagnostics: recentDiagnostics,
           }),
         });
-        const result = await response.json();
+        const result = await readJsonResponse(response);
         if (reporterAuth && response.status === 401) {
           saveReporterToken('');
           activeReporter = null;

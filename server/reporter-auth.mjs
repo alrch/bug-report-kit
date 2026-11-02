@@ -16,6 +16,8 @@ const validPin = (pin) => typeof pin === 'string' && /^\d{4}$/.test(pin);
 const tokenHash = (token) => createHash('sha256').update(token).digest('hex');
 const publicAccount = (account) => ({id: account.id, name: account.name});
 
+export const REPORTER_ACCESS_POLICY_VERSION = 1;
+
 export function createReporterAuth(db, config) {
   if (config.projects.some((project) => project.reporterAuth)
     && (typeof config.reporterAuthSecret !== 'string' || config.reporterAuthSecret.length < 32)) {
@@ -25,6 +27,7 @@ export function createReporterAuth(db, config) {
     id TEXT PRIMARY KEY, project_id TEXT NOT NULL, name TEXT NOT NULL, name_key TEXT NOT NULL,
     pin_salt TEXT NOT NULL, pin_hash TEXT NOT NULL, failed_pins INTEGER NOT NULL DEFAULT 0,
     locked_until INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'reporter' CHECK(role IN ('reporter', 'reviewer')),
     UNIQUE(project_id, name_key)
   );
   CREATE TABLE IF NOT EXISTS reporter_sessions (
@@ -32,8 +35,17 @@ export function createReporterAuth(db, config) {
     expires_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS reporter_sessions_account ON reporter_sessions(account_id);`);
+  // Existing accounts already had panel access. Preserve that permission once,
+  // while every account created after this migration starts as a reporter.
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    if (!db.prepare('PRAGMA table_info(reporter_accounts)').all().some(column => column.name === 'role')) {
+      db.exec("ALTER TABLE reporter_accounts ADD COLUMN role TEXT NOT NULL DEFAULT 'reporter' CHECK(role IN ('reporter', 'reviewer')); UPDATE reporter_accounts SET role='reviewer';");
+    }
+    db.exec('COMMIT');
+  } catch (error) { db.exec('ROLLBACK'); throw error; }
   const byName = db.prepare('SELECT * FROM reporter_accounts WHERE project_id=? AND name_key=?');
-  const byToken = db.prepare(`SELECT a.id,a.name,a.project_id FROM reporter_sessions s
+  const byToken = db.prepare(`SELECT a.id,a.name,a.project_id,a.role FROM reporter_sessions s
     JOIN reporter_accounts a ON a.id=s.account_id
     WHERE s.token_hash=? AND s.project_id=? AND s.expires_at>?`);
   const addAccount = db.prepare(`INSERT OR IGNORE INTO reporter_accounts
@@ -67,6 +79,8 @@ export function createReporterAuth(db, config) {
     return byToken.get(tokenHash(token), project.id, Date.now()) || null;
   };
   const register = async (project, body, ip) => {
+    if (project.reporterRegistration === false) return {status: 403, code: 'registration_closed',
+      error: 'Регистрация отправителей закрыта. Используйте выданные имя и PIN.'};
     if (limited(project, ip)) return {status: 429, error: 'Слишком много попыток. Повторите позже'};
     const name = normalizeName(body?.name);
     if (!validName(name)) return {status: 400, error: 'Имя: 2–80 букв, цифр, пробелов или символов _ . -'};
@@ -81,7 +95,7 @@ export function createReporterAuth(db, config) {
     if (!inserted.changes) return {status: 409, code: 'name_taken', error: 'Это имя уже занято. Войдите со своим PIN или придумайте другое имя.'};
     return {status: 201, ...makeSession(account)};
   };
-  const login = async (project, body, ip) => {
+  const login = async (project, body, ip, {panel = false} = {}) => {
     if (limited(project, ip)) return {status: 429, error: 'Слишком много попыток. Повторите позже'};
     const name = normalizeName(body?.name);
     if (!validName(name) || !validPin(body?.pin)) return {status: 400, error: 'Укажите имя и PIN из 4 цифр'};
@@ -98,12 +112,15 @@ export function createReporterAuth(db, config) {
       return {status: 401, code: 'wrong_pin', error: 'Неверный PIN. Проверьте четыре цифры и попробуйте ещё раз.'};
     }
     db.prepare('UPDATE reporter_accounts SET failed_pins=0,locked_until=0 WHERE id=?').run(account.id);
+    if (panel && !canAccessPanel(project, account)) return {status: 403, code: 'panel_access_denied',
+      error: 'Эта учётная запись может только отправлять баги через виджет. Панель доступна сопровождающим проекта.'};
     return {status: 200, ...makeSession(account)};
   };
+  const canAccessPanel = (project, account) => Boolean(project.panelAccess && account?.role === 'reviewer');
   const logout = (token) => {
     if (typeof token === 'string' && /^[A-Za-z0-9_-]{43}$/.test(token)) {
       db.prepare('DELETE FROM reporter_sessions WHERE token_hash=?').run(tokenHash(token));
     }
   };
-  return {register, login, logout, accountForToken};
+  return {register, login, logout, accountForToken, canAccessPanel};
 }
