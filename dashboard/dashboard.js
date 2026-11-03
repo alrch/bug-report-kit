@@ -1,5 +1,10 @@
 const $ = (selector) => document.querySelector(selector);
-let token = sessionStorage.getItem('bug-kit-panel-token') || '';
+const {panelMount, panelLogout} = document.body.dataset;
+const panelPath = (path) => panelMount ? panelMount + path.slice(1) : path;
+const gatewaySession = panelMount ? new AbortController() : null;
+const gatewayRequest = {mode: 'same-origin', credentials: 'same-origin', redirect: 'error', cache: 'no-store'};
+const validReportId = (id) => /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id);
+let token = panelMount ? '' : sessionStorage.getItem('bug-kit-panel-token') || '';
 let selected = null;
 let imageUrl = '';
 let audioUrl = '';
@@ -10,14 +15,48 @@ let projectNames = new Map();
 const statusLabels = {new:'Новый',triaged:'В очереди',in_progress:'Исправляется',
   ready_for_check:'Проверить исправление',closed:'Исправлен',cancelled:'Отменён'};
 
-async function api(path, options = {}) {
-  const response = await fetch(path, {
-    ...options,
-    headers: {Authorization: `Bearer ${token}`, ...(options.body ? {'Content-Type': 'application/json'} : {})},
+function showGatewayError(error) {
+  if (gatewaySession.signal.aborted) return;
+  gatewaySession.abort(error);
+  ++showing;
+  selected = null;
+  actor = null;
+  projectNames.clear();
+  $('#actor').textContent = '';
+  $('#project').replaceChildren();
+  if (imageUrl) URL.revokeObjectURL(imageUrl);
+  if (audioUrl) URL.revokeObjectURL(audioUrl);
+  imageUrl = audioUrl = '';
+  $('#list').replaceChildren();
+  $('#detail').replaceChildren();
+  $('#workspace').hidden = true;
+  $('#header-session').hidden = true;
+  $('#gateway-message').textContent = error.message;
+  $('#gateway-sign-in').hidden = false;
+  $('#gateway-session').hidden = false;
+}
+
+async function api(path, {responseType = 'json', ...options} = {}) {
+  gatewaySession?.signal.throwIfAborted();
+  const headers = options.body ? {'Content-Type': 'application/json'} : {};
+  if (!panelMount) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(panelPath(path), {
+    ...options, headers,
+    ...(gatewaySession ? {...gatewayRequest, signal: gatewaySession.signal} : {}),
   });
+  if (panelMount && [401, 403].includes(response.status)) {
+    const error = new Error('Для доступа к панели войдите через стартовую страницу.');
+    showGatewayError(error);
+    throw error;
+  }
   if (response.status === 401) throw new Error('Сессия завершилась. Войдите снова.');
-  if (!response.ok) throw new Error((await response.json()).error || 'Ошибка сервера');
-  return response;
+  if (!response.ok) {
+    const result = await response.json().catch(() => ({}));
+    throw new Error(result.error || 'Ошибка сервера');
+  }
+  const body = await response[responseType]();
+  gatewaySession?.signal.throwIfAborted();
+  return body;
 }
 
 function message(text, isError = false) {
@@ -30,7 +69,7 @@ async function loadList() {
   if ($('#project').value) query.set('project', $('#project').value);
   if ($('#filter').value) query.set('status', $('#filter').value);
   query.set('offset', String(offset));
-  const items = await (await api(`/api/reports?${query}`)).json();
+  const items = await api(`/api/reports?${query}`);
   const list = $('#list');
   list.replaceChildren();
   if (!items.length) list.textContent = 'Пока нет багов.';
@@ -49,7 +88,11 @@ async function loadList() {
     meta.className = 'muted';
     meta.textContent = `${report.reporterName || 'Анонимный пользователь'} · ${new Date(report.createdAt).toLocaleString()}`;
     button.append(title, status, meta);
-    button.onclick = () => { history.replaceState(null, '', `/reports/${report.id}`); void showReport(report.id); };
+    button.onclick = () => {
+      if (panelMount && !validReportId(report.id)) return message('Неверный номер карточки.', true);
+      history.replaceState(null, '', panelPath(`/reports/${report.id}`));
+      void showReport(report.id).catch((error) => message(error.message, true));
+    };
     list.append(button);
   }
 }
@@ -126,8 +169,9 @@ function readableHistory(history = [], reporterName = '') {
 }
 
 async function showReport(id) {
+  if (panelMount && !validReportId(id)) throw new Error('Неверный номер карточки.');
   const generation = ++showing;
-  const report = await (await api(`/api/reports/${id}`)).json();
+  const report = await api(`/api/reports/${id}`);
   if (generation !== showing) return;
   selected = report;
   if (audioUrl) URL.revokeObjectURL(audioUrl); audioUrl = '';
@@ -155,7 +199,7 @@ async function showReport(id) {
   if (imageUrl) URL.revokeObjectURL(imageUrl);
   imageUrl = '';
   if (selected.screenshotAvailable) {
-    imageUrl = URL.createObjectURL(await (await api(`/api/reports/${id}/screenshot`)).blob());
+    imageUrl = URL.createObjectURL(await api(`/api/reports/${id}/screenshot`, {responseType: 'blob'}));
     const img = document.createElement('img');
     img.className = 'report-image';
     img.alt = 'Выделенная область страницы';
@@ -172,7 +216,7 @@ async function showReport(id) {
     download.textContent = 'Скачать файл';
     download.onclick = async () => {
       try {
-        const data = await (await api(`/api/reports/${id}/attachment`)).blob();
+        const data = await api(`/api/reports/${id}/attachment`, {responseType: 'blob'});
         const objectUrl = URL.createObjectURL(data);
         const link = document.createElement('a');
         link.href = objectUrl;
@@ -192,7 +236,7 @@ async function showReport(id) {
     play.onclick = async () => {
       play.disabled = true;
       try {
-        const blob = await (await api(`/api/reports/${id}/audio`)).blob();
+        const blob = await api(`/api/reports/${id}/audio`, {responseType: 'blob'});
         if (generation !== showing) return;
         audioUrl = URL.createObjectURL(blob); player.src = audioUrl; player.hidden = false; play.hidden = true;
       } catch (error) {message(error.message, true); play.disabled = false;}
@@ -229,12 +273,12 @@ async function showReport(id) {
     textBlock(technical, 'Код и проверки', JSON.stringify(selected.fixEvidence, null, 2));
   }
   if (selected.duplicateOf) textBlock(technical, 'Связанный баг', selected.duplicateOf);
-  const related = await (await api(`/api/reports/${id}/related`)).json();
+  const related = await api(`/api/reports/${id}/related`);
   if (related.length) textBlock(technical, 'Похожие баги', related.map((item) =>
     `${item.id} · ${item.title} · ${statusLabels[item.status]}`).join('\n'));
   actionButton(technical, 'Открыть HTML-отчёт', async () => {
     try {
-      const blob = await (await api(`/api/reports/${id}/html`)).blob();
+      const blob = await api(`/api/reports/${id}/html`, {responseType: 'blob'});
       const url = URL.createObjectURL(blob);
       window.open(url, '_blank', 'noopener');
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
@@ -271,27 +315,34 @@ async function showReport(id) {
 }
 
 async function enter() {
-  if (!token) return;
+  if (!panelMount && !token) return;
   try {
-    actor = await (await api('/api/me')).json();
-    const projects = await (await api('/api/projects')).json();
+    actor = await api('/api/me');
+    const projects = await api('/api/projects');
     projectNames = new Map(projects.map((project) => [project.id, project.name]));
-    sessionStorage.setItem('bug-kit-panel-token', token);
+    if (!panelMount) sessionStorage.setItem('bug-kit-panel-token', token);
     $('#actor').textContent = actor.name;
     $('#header-session').hidden = false;
     $('#project').replaceChildren(new Option('Все доступные', ''));
     for (const project of projects) $('#project').add(new Option(project.name, project.id));
     $('#project-filter').hidden = projects.length <= 1;
-    $('#login').hidden = true;
+    $(panelMount ? '#gateway-session' : '#login').hidden = true;
     $('#workspace').hidden = false;
     const now = new Date();
     const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     $('#from').value = `${month}-01`;
     $('#to').value = `${month}-${String(now.getDate()).padStart(2, '0')}`;
     await loadList();
-    const id = /^\/reports\/([^/]+)$/.exec(location.pathname)?.[1];
-    if (id) await showReport(id);
+    const path = panelMount && location.pathname.startsWith(panelMount)
+      ? location.pathname.slice(panelMount.length - 1) : location.pathname;
+    const id = /^\/reports\/([^/]+)$/.exec(path)?.[1];
+    if (id && panelMount && !validReportId(id)) message('Неверный номер карточки.', true);
+    else if (id) await showReport(id);
   } catch (error) {
+    if (panelMount) {
+      showGatewayError(error);
+      return;
+    }
     sessionStorage.removeItem('bug-kit-panel-token');
     token = '';
     $('#login-error').textContent = error.message;
@@ -341,16 +392,13 @@ function summaryQuery() {
   return query;
 }
 
-$('#login-button').onclick = () => signIn('login');
-$('#register-button').onclick = () => signIn('register');
-$('#login-pin').onkeydown = (event) => { if (event.key === 'Enter') void signIn('login'); };
 $('#refresh').onclick = () => loadList().catch((error) => message(error.message, true));
 $('#project').onchange = $('#filter').onchange = () => { offset = 0; void loadList().catch((error) => message(error.message, true)); };
 $('#previous').onclick = () => { offset = Math.max(0, offset - 100); void loadList().catch((error) => message(error.message, true)); };
 $('#next').onclick = () => { offset += 100; void loadList().catch((error) => message(error.message, true)); };
 $('#summary-html').onclick = async () => {
   try {
-    const blob = await (await api(`/api/summary/html?${summaryQuery()}`)).blob();
+    const blob = await api(`/api/summary/html?${summaryQuery()}`, {responseType: 'blob'});
     const url = URL.createObjectURL(blob);
     window.open(url, '_blank', 'noopener');
     setTimeout(() => URL.revokeObjectURL(url), 60000);
@@ -358,10 +406,36 @@ $('#summary-html').onclick = async () => {
 };
 $('#logout').onclick = async (event) => {
   event.preventDefault();
+  if (panelMount) {
+    try {
+      const response = await fetch(panelLogout, {method: 'POST', mode: 'same-origin', credentials: 'same-origin'});
+      if (!response.ok) throw new Error('Logout was rejected');
+      const check = await fetch(panelPath('/api/me'), gatewayRequest);
+      if (![401, 403].includes(check.status)) throw new Error('Gateway session is still active');
+      showGatewayError(new Error('Сессия завершилась.'));
+      location.replace($('#logout').href);
+    } catch {
+      message('Не удалось выйти. Повторите попытку.', true);
+    }
+    return;
+  }
   try { await api('/api/panel/logout', {method: 'POST'}); } catch { /* Expired session is already signed out. */ }
   sessionStorage.removeItem('bug-kit-panel-token');
   token = '';
   location.href = '/';
 };
-void loadLoginProjects().catch((error) => { $('#login-error').textContent = error.message; });
-if (token) void enter();
+if (panelMount) {
+  window.addEventListener('pagehide', (event) => {
+    if (event.persisted) $('#workspace').hidden = true;
+  });
+  window.addEventListener('pageshow', (event) => {
+    if (event.persisted) location.reload();
+  });
+  void enter();
+} else {
+  $('#login-button').onclick = () => signIn('login');
+  $('#register-button').onclick = () => signIn('register');
+  $('#login-pin').onkeydown = (event) => { if (event.key === 'Enter') void signIn('login'); };
+  void loadLoginProjects().catch((error) => { $('#login-error').textContent = error.message; });
+  if (token) void enter();
+}
