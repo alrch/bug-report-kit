@@ -136,7 +136,8 @@ function panelGatewayConfig(gateway) {
   const localPath = /^\/(?:[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*\/?)?$/;
   if (!gateway || !['mountPath', 'signInPath', 'logoutPath'].every(key =>
     typeof gateway[key] === 'string' && localPath.test(gateway[key]))
-    || gateway.mountPath === '/' || !gateway.mountPath.endsWith('/')) {
+    || gateway.mountPath === '/' || !gateway.mountPath.endsWith('/')
+    || (gateway.preserveLegacy !== undefined && typeof gateway.preserveLegacy !== 'boolean')) {
     throw new Error('panelGateway requires a non-root mountPath ending in / and local signInPath and logoutPath');
   }
   return gateway;
@@ -598,12 +599,15 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
         return json(res, 405, {error: 'Метод не поддерживается'});
       }
 
-      if (req.method === 'GET' && (url.pathname === '/' || url.pathname.startsWith('/reports/'))) {
+      const gatewayPage = panelGateway && (url.pathname === panelGateway.mountPath ||
+        url.pathname.startsWith(panelGateway.mountPath + 'reports/'));
+      if (req.method === 'GET' && (url.pathname === '/' || url.pathname.startsWith('/reports/') || gatewayPage)) {
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store'});
-        res.end(renderDashboard(readFileSync(resolve(rootDir, 'dashboard/index.html'), 'utf8'), panelGateway));
+        const useGateway = panelGateway && (!panelGateway.preserveLegacy || gatewayPage);
+        res.end(renderDashboard(readFileSync(resolve(rootDir, 'dashboard/index.html'), 'utf8'), useGateway ? panelGateway : null));
         return;
       }
-      if (req.method === 'GET' && url.pathname === '/dashboard.js') {
+      if (req.method === 'GET' && (url.pathname === '/dashboard.js' || (panelGateway && url.pathname === panelGateway.mountPath + 'dashboard.js'))) {
         res.writeHead(200, {'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store'});
         res.end(readFileSync(resolve(rootDir, 'dashboard/dashboard.js')));
         return;
