@@ -8,7 +8,7 @@ import {isIP} from 'node:net';
 import {DatabaseSync} from 'node:sqlite';
 import {applyAction, STATUSES} from './workflow.mjs';
 import {getPeriodSummary, summaryHtml} from './summary.mjs';
-import {createReporterAuth} from './reporter-auth.mjs';
+import {createReporterAuth, REPORTER_ACCESS_POLICY_VERSION} from './reporter-auth.mjs';
 
 const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const MAX_BODY = 18 * 1024 * 1024;
@@ -205,7 +205,7 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
     for (const project of config.projects) {
       if (!project.reporterAuth || !project.panelAccess) continue;
       const account = reporterAuth.accountForToken(project, bearer);
-      if (account) return {name: account.name, role: 'reviewer', projects: [project.id]};
+      if (reporterAuth.canAccessPanel(project, account)) return {name: account.name, role: 'reviewer', projects: [project.id]};
     }
     return null;
   };
@@ -230,7 +230,7 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
     try {
       if (req.method === 'GET' && url.pathname === '/healthz') {
         db.prepare('SELECT 1 AS ok').get();
-        return json(res, 200, {ok: true});
+        return json(res, 200, {ok: true, reporterAccessPolicyVersion: REPORTER_ACCESS_POLICY_VERSION});
       }
       if (req.method === 'GET' && ['/widget.js', '/loader.js', '/client.mjs', '/client.d.mts', '/loading-ui.mjs'].includes(url.pathname)) {
         const path = url.pathname === '/loading-ui.mjs'
@@ -250,14 +250,16 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
         return json(res, 200, config.projects.filter((project) => project.reporterAuth && project.panelAccess)
           .map(({id, name}) => ({id, name: name || id})));
       }
-      if (req.method === 'POST' && ['/api/panel/login', '/api/panel/register'].includes(url.pathname)) {
+      if (url.pathname === '/api/panel/register') {
+        return json(res, 403, {code: 'panel_registration_closed',
+          error: 'Самостоятельная регистрация в панели закрыта. Для отправки бага создайте имя в виджете.'});
+      }
+      if (req.method === 'POST' && url.pathname === '/api/panel/login') {
         const body = await readJson(req);
         const project = config.projects.find((item) => item.id === body?.projectId
           && item.reporterAuth && item.panelAccess);
         if (!project) return json(res, 403, {error: 'Доступ к панели для проекта не настроен'});
-        const result = url.pathname.endsWith('/register')
-          ? await reporterAuth.register(project, body, clientIpFor(req))
-          : await reporterAuth.login(project, body, clientIpFor(req));
+        const result = await reporterAuth.login(project, body, clientIpFor(req), {panel: true});
         const {status, ...payload} = result;
         return json(res, status, payload);
       }
@@ -392,7 +394,9 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
         db.exec('COMMIT');
         } catch (error) { db.exec('ROLLBACK'); throw error; }
         setImmediate(() => void audio.pump());
-        return json(res, 201, {id, status: 'new', reportUrl: `/reports/${id}`});
+        return json(res, 201, {id, status: 'new',
+          ...(!project.reporterAuth || reporterAuth.canAccessPanel(project, account)
+            ? {reportUrl: `/reports/${id}`} : {})});
       }
 
       if (url.pathname.startsWith('/api/')) {
@@ -544,6 +548,11 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
       if (req.method === 'GET' && (url.pathname === '/' || url.pathname.startsWith('/reports/'))) {
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store'});
         res.end(readFileSync(resolve(rootDir, 'dashboard/index.html')));
+        return;
+      }
+      if (req.method === 'GET' && url.pathname === '/http-response.mjs') {
+        res.writeHead(200, {'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store'});
+        res.end(readFileSync(resolve(import.meta.dirname, '../shared/http-response.mjs')));
         return;
       }
       if (req.method === 'GET' && url.pathname === '/dashboard.js') {
