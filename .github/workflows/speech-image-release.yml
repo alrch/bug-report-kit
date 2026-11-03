@@ -92,7 +92,9 @@ jobs:
           cache-dependency-path: source/package-lock.json
       - name: Install and test source
         working-directory: source
-        run: npm ci && npm test && npm run build
+        run: |
+          npm ci && npm test && npm run build
+          python3 -m unittest discover -s tests -p 'test_combine_snapshots.py' -v
       - name: Verify shared client and existing embed in Chromium
         working-directory: source
         run: |
