@@ -11,7 +11,9 @@
       "widgetKey": "replace-with-random-public-key",
       "voiceEnabled": false,
       "reporterAuth": true,
+      "reporterRegistration": true,
       "panelAccess": true,
+      "legacyReviewerAccountIds": [],
       "allowedOrigins": ["http://localhost:7338"],
       "repositories": [
         {"name": "example-web", "url": "https://github.com/owner/example-web"}
