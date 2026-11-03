@@ -10,6 +10,16 @@ import {DatabaseSync} from 'node:sqlite';
 import {createApp} from '../server/app.mjs';
 const execFileAsync = promisify(execFile);
 
+test('gateway panel config requires literal same-origin paths and an isolated mount', () => {
+  const config = {projects: [{}], teamTokens: [{}]};
+  const valid = {mountPath: '/team/bugs/', signInPath: '/team/', logoutPath: '/team/logout'};
+  for (const panelGateway of [null, {...valid, mountPath:'/'}, {...valid, mountPath:'/team/bugs'},
+    {...valid, signInPath:'//foreign.example/'}, {...valid, signInPath:'/team/%2e%2e/'},
+    {...valid, logoutPath:'https://foreign.example/logout'}, {...valid, logoutPath:'/team/"onclick="foo'}]) {
+    assert.throws(() => createApp({...config, panelGateway}), /panelGateway requires/);
+  }
+});
+
 test('reporter creates a report; team reads, updates, and views HTML', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'bug-kit-test-'));
   t.after(() => rmSync(directory, {recursive: true, force: true}));

@@ -131,9 +131,35 @@ function rowToReport(row) {
   };
 }
 
+function panelGatewayConfig(gateway) {
+  if (gateway === undefined) return null;
+  const localPath = /^\/(?:[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*\/?)?$/;
+  if (!gateway || !['mountPath', 'signInPath', 'logoutPath'].every(key =>
+    typeof gateway[key] === 'string' && localPath.test(gateway[key]))
+    || gateway.mountPath === '/' || !gateway.mountPath.endsWith('/')) {
+    throw new Error('panelGateway requires a non-root mountPath ending in / and local signInPath and logoutPath');
+  }
+  return gateway;
+}
+
+function renderDashboard(html, gateway) {
+  if (!gateway) return html;
+  const {mountPath, signInPath, logoutPath} = gateway;
+  return html
+    .replace('<body>', `<body data-panel-mount="${mountPath}" data-panel-logout="${logoutPath}">`)
+    .replace('id="logout" href="/"', `id="logout" href="${signInPath}"`)
+    .replace(/<!-- bearer-login -->[\s\S]*?<!-- end bearer-login -->/, `<section class="panel login-panel" id="gateway-session" role="status">
+      <h2>Баги команды</h2>
+      <p id="gateway-message">Проверяем сессию…</p>
+      <a id="gateway-sign-in" href="${signInPath}" hidden>Перейти ко входу</a>
+    </section>`)
+    .replace('src="/dashboard.js"', `src="${mountPath}dashboard.js"`);
+}
+
 export function createApp(config, {rootDir = process.cwd(), database = config.database || './data/reports.sqlite'} = {}) {
   if (!Array.isArray(config.projects) || !config.projects.length) throw new Error('Настройте проекты');
   if (!Array.isArray(config.teamTokens) || !config.teamTokens.length) throw new Error('Настройте доступ команды');
+  const panelGateway = panelGatewayConfig(config.panelGateway);
   const databasePath = resolve(rootDir, database);
   mkdirSync(dirname(databasePath), {recursive: true});
   const db = new DatabaseSync(databasePath);
@@ -543,7 +569,7 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
 
       if (req.method === 'GET' && (url.pathname === '/' || url.pathname.startsWith('/reports/'))) {
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store'});
-        res.end(readFileSync(resolve(rootDir, 'dashboard/index.html')));
+        res.end(renderDashboard(readFileSync(resolve(rootDir, 'dashboard/index.html'), 'utf8'), panelGateway));
         return;
       }
       if (req.method === 'GET' && url.pathname === '/dashboard.js') {
