@@ -27,4 +27,5 @@ test('shared gateway and existing PIN panel coexist without exposing report data
   assert.equal((await fetch(base+'/api/reports')).status,401);
   assert.equal((await fetch(base+'/api/reports',{headers:{'X-Panel-Gateway':'true'}})).status,401);
   assert.throws(()=>createApp({...config,panelGateway:{...gateway,preserveLegacy:'true'}},{database:join(directory,'bad.sqlite')}),/panelGateway/);
+  assert.throws(()=>createApp({...config,teamTokens:[config.teamTokens[0],{...config.teamTokens[0],projects:['other']}]},{database:join(directory,'bad.sqlite')}),/Duplicate team token/);
 });

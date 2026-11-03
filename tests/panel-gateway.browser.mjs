@@ -116,6 +116,7 @@ test('gateway panel uses the session, preserves report links, and never sends a 
     new URL(reply.url()).searchParams.get('status') === 'new');
   await page.locator('#filter').selectOption('new');
   await filtered;
+  await page.waitForLoadState('networkidle');
   assert.equal(await page.evaluate(() => sessionStorage.getItem('bug-kit-panel-token')), 'stale-bearer-fixture');
 
   const beforeInvalidLink = received.length;

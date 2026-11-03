@@ -160,6 +160,10 @@ function renderDashboard(html, gateway) {
 export function createApp(config, {rootDir = process.cwd(), database = config.database || './data/reports.sqlite'} = {}) {
   if (!Array.isArray(config.projects) || !config.projects.length) throw new Error('Настройте проекты');
   if (!Array.isArray(config.teamTokens) || !config.teamTokens.length) throw new Error('Настройте доступ команды');
+  const teamTokenValues = config.teamTokens.map(actor => actor.token).filter(token => typeof token === 'string' && token.length);
+  if (new Set(teamTokenValues).size !== teamTokenValues.length) {
+    throw new Error('Duplicate team token requires explicit access reconciliation');
+  }
   const projectIds = config.projects.map(project => project.id);
   const projectKeys = config.projects.map(project => project.widgetKey).filter(key => key !== undefined);
   if (new Set(projectIds).size !== projectIds.length || new Set(projectKeys).size !== projectKeys.length) {
