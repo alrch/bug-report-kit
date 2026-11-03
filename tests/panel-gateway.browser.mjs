@@ -40,7 +40,7 @@ async function fixture(t, config) {
 
 test('gateway panel uses the session, preserves report links, and never sends a browser bearer', async t => {
   const reportOrigin = 'http://localhost:7338';
-  const backend = await fixture(t, {panelGateway, projects:[{id:'site', name:'Fixture site', widgetKey:'public-key',
+  const backend = await fixture(t, {panelGateway:{...panelGateway,preserveLegacy:true}, projects:[{id:'site', name:'Fixture site', widgetKey:'public-key',
     allowedOrigins:[reportOrigin], reporterAuth:true, panelAccess:false}]});
   let sessionValid = true;
   const received = [];
@@ -58,12 +58,12 @@ test('gateway panel uses the session, preserves report links, and never sends a 
     const headers = {...req.headers};
     let path = req.url;
     if (path.startsWith(panelGateway.mountPath)) {
-      path = '/' + path.slice(panelGateway.mountPath.length);
-      if (path.startsWith('/api/') && (!sessionValid || req.headers.cookie !== 'fixture_session=valid')) {
+      const relative = '/' + path.slice(panelGateway.mountPath.length);
+      if (relative.startsWith('/api/') && (!sessionValid || req.headers.cookie !== 'fixture_session=valid')) {
         res.writeHead(403, {'Content-Type':'text/html'}); return res.end('<p>Forbidden</p>');
       }
       delete headers.authorization;
-      if (path.startsWith('/api/')) headers.authorization = `Bearer ${gatewayToken}`;
+      if (relative.startsWith('/api/')) { headers.authorization = `Bearer ${gatewayToken}`; path = relative; }
     }
     delete headers.cookie;
     const forward = request(backend + path, {method:req.method, headers}, reply => {
@@ -93,6 +93,8 @@ test('gateway panel uses the session, preserves report links, and never sends a 
   await context.addCookies([{name:'fixture_session',value:'valid',domain:'127.0.0.1',path:'/team/',httpOnly:true}]);
   const page = await context.newPage();
   const base = origin + panelGateway.mountPath;
+  await page.goto(origin+'/');
+  assert.equal(await page.getByLabel('PIN', {exact:true}).count(), 1);
   const response = await page.goto(base + 'reports/' + id);
   assert.doesNotMatch(await response.text(), /login-pin|server-side-reviewer-fixture/);
   await page.getByRole('heading', {name:'Private fixture report'}).waitFor();
@@ -114,6 +116,7 @@ test('gateway panel uses the session, preserves report links, and never sends a 
     new URL(reply.url()).searchParams.get('status') === 'new');
   await page.locator('#filter').selectOption('new');
   await filtered;
+  await page.waitForLoadState('networkidle');
   assert.equal(await page.evaluate(() => sessionStorage.getItem('bug-kit-panel-token')), 'stale-bearer-fixture');
 
   const beforeInvalidLink = received.length;
