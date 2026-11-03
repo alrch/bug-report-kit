@@ -31,6 +31,7 @@ test('one service preserves distinct project PIN secrets and existing sessions a
   execFileSync('python3',[join(import.meta.dirname,'../scripts/combine-snapshots.py'),'--template',join(root,'template.sqlite'),
     '--target',join(root,'combined.sqlite'),'--source','alpha',join(root,'0.sqlite'),'--source','beta',join(root,'1.sqlite')]);
   const {app,url}=await start(combined,'./combined.sqlite');
+  let newBeta;
   try {
     const exposed = await (await fetch(url+'/api/projects',{headers:{Authorization:'Bearer test-team-token'}})).text();
     const panelProjects = await (await fetch(url+'/api/panel/projects')).text();
@@ -44,7 +45,23 @@ test('one service preserves distinct project PIN secrets and existing sessions a
       const attachment=await fetch(url+'/api/reports/'+reports[i]+'/attachment',{headers:{Authorization:'Bearer '+tokens[i]}});
       assert.equal(attachment.status,200);assert.equal(await attachment.text(),'hello');
     }
+    const added=await post(url,projects[1],'/api/reporter/register',{name:'New beta reporter',pin:'5678'});
+    assert.equal(added.status,201);newBeta=(await added.json()).token;
+    assert.equal((await post(url,projects[1],'/api/reports',{description:'After cutover',pageUrl:origin+'/page'},newBeta)).status,201);
   } finally {await stop(app);}
+  execFileSync('python3',[join(import.meta.dirname,'../scripts/split-snapshot.py'),'--template',join(root,'template.sqlite'),
+    '--source',join(root,'combined.sqlite'),'--target','alpha',join(root,'alpha-restored.sqlite'),'--target','beta',join(root,'beta-restored.sqlite')]);
+  for(let i=0;i<2;i++){
+    const restored=await start({projects:[{...projects[i],panelAccess:false}],teamTokens:actors,reporterAuthSecret:secrets[i]},`./${projects[i].id}-restored.sqlite`);
+    try {
+      assert.equal((await post(restored.url,projects[i],'/api/reporter/me',{},tokens[i])).status,200);
+      assert.equal((await fetch(restored.url+'/api/reports/'+reports[i],{headers:{Authorization:'Bearer test-team-token'}})).status,200);
+      if(i===1){
+        assert.equal((await post(restored.url,projects[i],'/api/reporter/me',{},newBeta)).status,200);
+        assert.equal((await fetch(restored.url+'/api/reports',{headers:{Authorization:'Bearer '+newBeta}})).status,401);
+      }
+    } finally {await stop(restored.app);}
+  }
   assert.throws(()=>createApp({...combined,projects:[{...combined.projects[0],reporterAuthSecret:''}]},{rootDir:root,database:'./invalid.sqlite'}),/reporterAuthSecret/);
   assert.throws(()=>createApp({...combined,projects:[combined.projects[0],combined.projects[0]]},{rootDir:root,database:'./duplicate.sqlite'}),/Duplicate project/);
   assert.throws(()=>createApp({...combined,projects:[combined.projects[0],{...combined.projects[1],widgetKey:combined.projects[0].widgetKey}]},{rootDir:root,database:'./duplicate.sqlite'}),/Duplicate project/);

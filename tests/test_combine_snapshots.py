@@ -10,6 +10,9 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('combine_snapshots', ROOT / 'scripts/combine-snapshots.py')
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
+split_spec = importlib.util.spec_from_file_location('split_snapshot', ROOT / 'scripts/split-snapshot.py')
+splitter = importlib.util.module_from_spec(split_spec)
+split_spec.loader.exec_module(splitter)
 
 
 class CombineSnapshots(unittest.TestCase):
@@ -95,6 +98,24 @@ class CombineSnapshots(unittest.TestCase):
         with self.assertRaises(ValueError):
             module.combine(self.template, [('alpha', source)], target)
         self.assertFalse(target.exists())
+
+    def test_split_preserves_new_rows_and_refuses_missing_project(self):
+        a, b = self.make('a', 'alpha'), self.make('b', 'beta')
+        shared = self.root / 'shared.sqlite'
+        module.combine(self.template, [('alpha', a), ('beta', b)], shared)
+        with closing(sqlite3.connect(shared)) as db, db:
+            db.execute('INSERT INTO reports VALUES (?,?,?,?)', ('new-beta', 'beta', b'new', b'after-switch'))
+        alpha, beta = self.root / 'out-a.sqlite', self.root / 'out-b.sqlite'
+        with self.assertRaises(ValueError):
+            splitter.split(self.template, shared, [('alpha', alpha)])
+        self.assertFalse(alpha.exists())
+        self.assertEqual(splitter.split(self.template, shared, [('alpha', alpha), ('beta', beta)]), 2)
+        with closing(sqlite3.connect(beta)) as db:
+            self.assertEqual(db.execute('SELECT attachment FROM reports WHERE id=?', ('new-beta',)).fetchone()[0], b'after-switch')
+        with closing(sqlite3.connect(alpha)) as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM reports WHERE project_id=?', ('beta',)).fetchone()[0], 0)
+        with self.assertRaises(ValueError):
+            splitter.split(self.template, shared, [('alpha', alpha), ('beta', beta)])
 
 
 if __name__ == '__main__':
