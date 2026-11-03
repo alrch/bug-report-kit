@@ -159,6 +159,11 @@ function renderDashboard(html, gateway) {
 export function createApp(config, {rootDir = process.cwd(), database = config.database || './data/reports.sqlite'} = {}) {
   if (!Array.isArray(config.projects) || !config.projects.length) throw new Error('Настройте проекты');
   if (!Array.isArray(config.teamTokens) || !config.teamTokens.length) throw new Error('Настройте доступ команды');
+  const projectIds = config.projects.map(project => project.id);
+  const projectKeys = config.projects.map(project => project.widgetKey).filter(key => key !== undefined);
+  if (new Set(projectIds).size !== projectIds.length || new Set(projectKeys).size !== projectKeys.length) {
+    throw new Error('Duplicate project identity or widget key');
+  }
   const panelGateway = panelGatewayConfig(config.panelGateway);
   const databasePath = resolve(rootDir, database);
   mkdirSync(dirname(databasePath), {recursive: true});

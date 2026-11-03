@@ -17,9 +17,13 @@ const tokenHash = (token) => createHash('sha256').update(token).digest('hex');
 const publicAccount = (account) => ({id: account.id, name: account.name});
 
 export function createReporterAuth(db, config) {
-  if (config.projects.some((project) => project.reporterAuth)
-    && (typeof config.reporterAuthSecret !== 'string' || config.reporterAuthSecret.length < 32)) {
-    throw new Error('Для reporterAuth задайте reporterAuthSecret длиной не менее 32 символов');
+  const secrets = new Map();
+  for (const project of config.projects.filter(project => project.reporterAuth)) {
+    const secret = project.reporterAuthSecret === undefined ? config.reporterAuthSecret : project.reporterAuthSecret;
+    if (typeof secret !== 'string' || secret.length < 32) {
+      throw new Error('Для reporterAuth задайте reporterAuthSecret длиной не менее 32 символов');
+    }
+    secrets.set(project.id, secret);
   }
   db.exec(`CREATE TABLE IF NOT EXISTS reporter_accounts (
     id TEXT PRIMARY KEY, project_id TEXT NOT NULL, name TEXT NOT NULL, name_key TEXT NOT NULL,
@@ -42,8 +46,8 @@ export function createReporterAuth(db, config) {
     (token_hash,account_id,project_id,expires_at) VALUES (?,?,?,?)`);
   const attempts = new Map();
 
-  const hashPin = async (pin, salt) => {
-    const protectedPin = createHmac('sha256', config.reporterAuthSecret).update(pin).digest();
+  const hashPin = async (project, pin, salt) => {
+    const protectedPin = createHmac('sha256', secrets.get(project.id)).update(pin).digest();
     return (await scryptAsync(protectedPin, Buffer.from(salt, 'hex'), 64)).toString('hex');
   };
   const limited = (project, ip) => {
@@ -75,7 +79,7 @@ export function createReporterAuth(db, config) {
       return {status: 409, code: 'name_taken', error: 'Это имя уже занято. Войдите со своим PIN или придумайте другое имя.'};
     }
     const salt = randomBytes(16).toString('hex');
-    const pinHash = await hashPin(body.pin, salt);
+    const pinHash = await hashPin(project, body.pin, salt);
     const account = {id: randomUUID(), project_id: project.id, name};
     const inserted = addAccount.run(account.id, project.id, name, nameKey(name), salt, pinHash, new Date().toISOString());
     if (!inserted.changes) return {status: 409, code: 'name_taken', error: 'Это имя уже занято. Войдите со своим PIN или придумайте другое имя.'};
@@ -88,7 +92,7 @@ export function createReporterAuth(db, config) {
     const account = byName.get(project.id, nameKey(name));
     if (!account) return {status: 401, code: 'name_not_found', error: 'Такого имени нет. Проверьте написание или создайте имя.'};
     if (account.locked_until > Date.now()) return {status: 429, error: 'Слишком много ошибок PIN. Повторите позже'};
-    const attemptedHash = await hashPin(body.pin, account.pin_salt);
+    const attemptedHash = await hashPin(project, body.pin, account.pin_salt);
     const correct = timingSafeEqual(Buffer.from(attemptedHash, 'hex'), Buffer.from(account.pin_hash, 'hex'));
     if (!correct) {
       const failed = account.failed_pins + 1;
