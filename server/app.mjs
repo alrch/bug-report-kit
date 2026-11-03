@@ -205,6 +205,25 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
   db.exec('CREATE INDEX IF NOT EXISTS reports_accepted ON reports(project_id, accepted_at);');
   db.exec('CREATE INDEX IF NOT EXISTS reports_fingerprint ON reports(project_id, fingerprint);');
   const reporterAuth = createReporterAuth(db, config);
+  // Optional explicit legacy panel membership preserves existing PIN accounts
+  // while newly registered reporters remain submit-only. Omission preserves
+  // the existing private-team behaviour; malformed membership fails closed.
+  for (const project of config.projects) {
+    if (project.panelAccountIds === undefined) continue;
+    if (!project.reporterAuth || !project.panelAccess || !Array.isArray(project.panelAccountIds) ||
+        project.panelAccountIds.some(id => typeof id !== 'string' || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)) ||
+        new Set(project.panelAccountIds).size !== project.panelAccountIds.length) {
+      db.close();
+      throw new Error('Invalid panel account allowlist');
+    }
+    const account = db.prepare('SELECT id FROM reporter_accounts WHERE id = ? AND project_id = ?');
+    if (project.panelAccountIds.some(id => !account.get(id, project.id))) {
+      db.close();
+      throw new Error('Unknown panel account');
+    }
+  }
+  const panelAccountAllowed = (project, account) => account &&
+    (project.panelAccountIds === undefined || project.panelAccountIds.includes(account.id));
   const voiceEnabled = project => project?.voiceEnabled === true;
   const audio = audioStore(db, config.transcription, {projectIds:config.projects.filter(voiceEnabled).map(project => project.id)});
   const reportFrom = row => ({...rowToReport(row), ...audio.metadata(row.id),
@@ -231,7 +250,7 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
     for (const project of config.projects) {
       if (!project.reporterAuth || !project.panelAccess) continue;
       const account = reporterAuth.accountForToken(project, bearer);
-      if (account) return {name: account.name, role: 'reviewer', projects: [project.id]};
+      if (panelAccountAllowed(project, account)) return {name: account.name, role: 'reviewer', projects: [project.id]};
     }
     return null;
   };
@@ -281,9 +300,16 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
         const project = config.projects.find((item) => item.id === body?.projectId
           && item.reporterAuth && item.panelAccess);
         if (!project) return json(res, 403, {error: 'Доступ к панели для проекта не настроен'});
+        if (project.panelAccountIds !== undefined && url.pathname.endsWith('/register')) {
+          return json(res, 403, {error: 'Регистрация доступа к панели закрыта'});
+        }
         const result = url.pathname.endsWith('/register')
           ? await reporterAuth.register(project, body, clientIpFor(req))
           : await reporterAuth.login(project, body, clientIpFor(req));
+        if (result.token && !panelAccountAllowed(project, result.reporter)) {
+          reporterAuth.logout(result.token);
+          return json(res, 403, {error: 'Нет доступа к панели'});
+        }
         const {status, ...payload} = result;
         return json(res, status, payload);
       }

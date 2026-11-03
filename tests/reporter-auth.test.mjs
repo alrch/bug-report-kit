@@ -118,3 +118,46 @@ test('reporter PIN account owns report identity and survives server restart', as
   assert.equal((await fetch(`${base}/api/me`, {headers: panelHeaders})).status, 401);
   assert.equal((await post('/api/reporter/login', 'site-key', {name: 'Мария', pin: '1234'})).status, 200);
 });
+
+test('explicit panel membership preserves an existing PIN account and denies new reporters', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'bug-kit-panel-members-'));
+  const origin = 'http://localhost:7338';
+  const project = {id: 'site', widgetKey: 'site-key', allowedOrigins: [origin], reporterAuth: true, panelAccess: true};
+  const config = {reporterAuthSecret: 'test-secret-with-more-than-thirty-two-characters', projects: [project],
+    teamTokens: [{token: 'team-token', projects: ['site']}]};
+  let app;
+  const start = async () => {
+    app = createApp(config, {rootDir: directory, database: './reports.sqlite'});
+    await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+    return `http://127.0.0.1:${app.server.address().port}`;
+  };
+  const stop = async () => { await new Promise(resolve => app.server.close(resolve)); app.db.close(); };
+  t.after(async () => { if (app?.server.listening) await stop(); rmSync(directory, {recursive: true, force: true}); });
+  let base = await start();
+  const post = (path, body, extra = {}) => fetch(base + path, {method: 'POST',
+    headers: {'Content-Type':'application/json', Origin: origin, 'X-Project-Key':'site-key', ...extra}, body: JSON.stringify(body)});
+  const old = await (await post('/api/reporter/register', {name:'Staff', pin:'1234'})).json();
+  await stop();
+  project.panelAccountIds = [old.reporter.id];
+  base = await start();
+  const staff = await post('/api/panel/login', {projectId:'site', name:'Staff', pin:'1234'});
+  assert.equal(staff.status, 200);
+  const staffToken = (await staff.json()).token;
+  const fresh = await (await post('/api/reporter/register', {name:'New reporter', pin:'5678'})).json();
+  const created = await post('/api/reports', {description:'Fixture report', pageUrl: origin + '/page'}, {'X-Reporter-Token':fresh.token});
+  assert.equal(created.status, 201);
+  const {id} = await created.json();
+  assert.equal((await fetch(base + '/api/reports/' + id, {headers:{Authorization:'Bearer ' + staffToken}})).status, 200);
+  for (const path of ['/api/me', '/api/reports', '/api/reports/' + id, '/api/reports/' + id + '/screenshot', '/api/reports/' + id + '/attachment']) {
+    assert.equal((await fetch(base + path, {headers:{Authorization:'Bearer ' + fresh.token}})).status, 401);
+  }
+  assert.equal((await fetch(base + '/api/reports/' + id, {method:'PATCH', headers:{Authorization:'Bearer ' + fresh.token, 'Content-Type':'application/json'}, body:'{}'})).status, 401);
+  assert.equal((await post('/api/panel/login', {projectId:'site', name:'New reporter', pin:'5678'})).status, 403);
+  assert.equal((await post('/api/panel/register', {projectId:'site', name:'Other', pin:'5678'})).status, 403);
+  assert.equal((await fetch(base + '/api/reports', {headers:{Authorization:'Bearer team-token'}})).status, 200);
+  await stop();
+  project.panelAccountIds = ['00000000-0000-4000-8000-000000000000'];
+  assert.throws(() => createApp(config, {rootDir: directory, database:'./reports.sqlite'}), /Unknown panel account/);
+  project.panelAccountIds = null;
+  assert.throws(() => createApp(config, {rootDir: directory, database:'./reports.sqlite'}), /Invalid panel account allowlist/);
+});
