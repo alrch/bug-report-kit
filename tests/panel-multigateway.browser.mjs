@@ -30,7 +30,8 @@ test('two project panels use the same UI while showing only their own reports', 
     req.pipe(upstream);
   });
   await new Promise(resolve=>proxy.listen(0,'127.0.0.1',resolve));
-  t.after(async()=>{await new Promise(resolve=>proxy.close(resolve));await new Promise(resolve=>app.server.close(resolve));app.db.close();rmSync(dir,{recursive:true,force:true});});
+  let browser;
+  t.after(async()=>{await browser?.close();proxy.closeAllConnections();await new Promise(resolve=>proxy.close(resolve));app.server.closeAllConnections();await new Promise(resolve=>app.server.close(resolve));app.db.close();rmSync(dir,{recursive:true,force:true});});
   const origin=`http://127.0.0.1:${proxy.address().port}`;
   for(const id of ids){
     const headers={Origin:appOrigin,'X-Project-Key':`key-${id}`,'Content-Type':'application/json'};
@@ -40,7 +41,7 @@ test('two project panels use the same UI while showing only their own reports', 
       body:JSON.stringify({description:`Report ${id}`,pageUrl:appOrigin+'/page'})});
     assert.equal(result.status,201);
   }
-  const browser=await chromium.launch();t.after(()=>browser.close());
+  browser=await chromium.launch();
   const context=await browser.newContext();await context.addCookies([{name:'hub',value:'fixture',domain:'127.0.0.1',path:'/projects/',httpOnly:true}]);
   const page=await context.newPage();
   for(const [id,other] of [['one','two'],['two','one']]){
