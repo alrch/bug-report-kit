@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "profile": "docker-server",
+  "instance": "example",
+  "artifact": {"image": "sha256:0000000000000000000000000000000000000000000000000000000000000000"},
+  "stateDirectory": "/var/lib/bug-kit-installer/example",
+  "configRef": "/opt/example-bugs/config.local.json",
+  "data": {"type": "volume", "source": "example_bugreports"},
+  "runtime": {"uid": 1000, "gid": 1000, "port": 7337},
+  "proxy": {"healthUrl": "https://bugs.example.com/healthz"}
+}
