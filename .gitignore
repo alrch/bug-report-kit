@@ -3,3 +3,6 @@ dist/
 data/
 config.local.json
 .DS_Store
+
+# Python bootstrap checks and operator helpers
+__pycache__/

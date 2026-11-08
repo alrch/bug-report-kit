@@ -143,6 +143,36 @@ function panelGatewayConfig(gateway) {
   return gateway;
 }
 
+function panelGatewaysConfig(config) {
+  if (config.panelGateways === undefined) {
+    const single = panelGatewayConfig(config.panelGateway);
+    return single ? [single] : [];
+  }
+  if (config.panelGateway !== undefined || !Array.isArray(config.panelGateways) ||
+      config.panelGateways.length === 0 || config.panelGateways.length > 100) {
+    throw new Error('panelGateways requires a non-empty list and no panelGateway');
+  }
+  const gateways = config.panelGateways.map(gateway => panelGatewayConfig(gateway));
+  if (gateways.some(gateway => !gateway || gateway.preserveLegacy !== true)) {
+    throw new Error('panelGateways must preserve the existing PIN panel');
+  }
+  if (gateways.some(gateway => ['/api/', '/reports/'].some(path =>
+    gateway.mountPath.startsWith(path) || path.startsWith(gateway.mountPath)) ||
+    gateways.some(other => [gateway.signInPath, gateway.logoutPath].some(path =>
+      path === other.mountPath.slice(0, -1) || path.startsWith(other.mountPath))))) {
+    throw new Error('panelGateways paths conflict with existing routes or redirects');
+  }
+  for (let i = 0; i < gateways.length; i++) {
+    for (let j = i + 1; j < gateways.length; j++) {
+      const a = gateways[i].mountPath, b = gateways[j].mountPath;
+      if (a.startsWith(b) || b.startsWith(a)) {
+        throw new Error('panelGateways mount paths must be distinct and disjoint');
+      }
+    }
+  }
+  return gateways;
+}
+
 function renderDashboard(html, gateway) {
   if (!gateway) return html;
   const {mountPath, signInPath, logoutPath} = gateway;
@@ -169,7 +199,7 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
   if (new Set(projectIds).size !== projectIds.length || new Set(projectKeys).size !== projectKeys.length) {
     throw new Error('Duplicate project identity or widget key');
   }
-  const panelGateway = panelGatewayConfig(config.panelGateway);
+  const panelGateways = panelGatewaysConfig(config);
   const databasePath = resolve(rootDir, database);
   mkdirSync(dirname(databasePath), {recursive: true});
   const db = new DatabaseSync(databasePath);
@@ -603,15 +633,16 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
         return json(res, 405, {error: 'Метод не поддерживается'});
       }
 
-      const gatewayPage = panelGateway && (url.pathname === panelGateway.mountPath ||
-        url.pathname.startsWith(panelGateway.mountPath + 'reports/'));
+      const pageGateway = panelGateways.find(gateway => url.pathname === gateway.mountPath ||
+        url.pathname.startsWith(gateway.mountPath + 'reports/'));
+      const legacyGateway = panelGateways.length === 1 && !panelGateways[0].preserveLegacy ? panelGateways[0] : null;
+      const gatewayPage = Boolean(pageGateway);
       if (req.method === 'GET' && (url.pathname === '/' || url.pathname.startsWith('/reports/') || gatewayPage)) {
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store'});
-        const useGateway = panelGateway && (!panelGateway.preserveLegacy || gatewayPage);
-        res.end(renderDashboard(readFileSync(resolve(rootDir, 'dashboard/index.html'), 'utf8'), useGateway ? panelGateway : null));
+        res.end(renderDashboard(readFileSync(resolve(rootDir, 'dashboard/index.html'), 'utf8'), pageGateway || legacyGateway));
         return;
       }
-      if (req.method === 'GET' && (url.pathname === '/dashboard.js' || (panelGateway && url.pathname === panelGateway.mountPath + 'dashboard.js'))) {
+      if (req.method === 'GET' && (url.pathname === '/dashboard.js' || panelGateways.some(gateway => url.pathname === gateway.mountPath + 'dashboard.js'))) {
         res.writeHead(200, {'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store'});
         res.end(readFileSync(resolve(rootDir, 'dashboard/dashboard.js')));
         return;
