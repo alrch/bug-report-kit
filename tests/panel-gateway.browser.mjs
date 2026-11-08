@@ -18,7 +18,7 @@ async function listen(server) {
   return `http://127.0.0.1:${server.address().port}`;
 }
 
-async function fixture(t, config) {
+async function fixture(t, config, resources) {
   const directory = mkdtempSync(join(tmpdir(), 'kit-panel-gateway-'));
   const app = createApp({
     projects: [{id: 'site', name: 'Fixture site', widgetKey: 'public-key', allowedOrigins: [],
@@ -31,6 +31,12 @@ async function fixture(t, config) {
     ...config,
   }, {database: join(directory, 'reports.sqlite')});
   t.after(async () => {
+    await resources.browser?.close();
+    if (resources.proxy) {
+      resources.proxy.closeAllConnections();
+      await new Promise(resolve => resources.proxy.close(resolve));
+    }
+    app.server.closeAllConnections();
     await new Promise(resolve => app.server.close(resolve));
     app.db.close();
     rmSync(directory, {recursive: true, force: true});
@@ -39,14 +45,15 @@ async function fixture(t, config) {
 }
 
 test('gateway panel uses the session, preserves report links, and never sends a browser bearer', async t => {
+  const resources = {};
   const reportOrigin = 'http://localhost:7338';
   const backend = await fixture(t, {panelGateway:{...panelGateway,preserveLegacy:true}, projects:[{id:'site', name:'Fixture site', widgetKey:'public-key',
-    allowedOrigins:[reportOrigin], reporterAuth:true, panelAccess:false}]});
+    allowedOrigins:[reportOrigin], reporterAuth:true, panelAccess:false}]}, resources);
   let sessionValid = true;
   const received = [];
   const proxy = createServer(handler);
+  resources.proxy = proxy;
   const origin = await listen(proxy);
-  t.after(() => new Promise(resolve => proxy.close(resolve)));
   const reporterHeaders = {Origin:reportOrigin,'X-Project-Key':'public-key','Content-Type':'application/json'};
   function handler(req, res) {
     received.push([req.method, req.url, req.headers.authorization]);
@@ -87,7 +94,7 @@ test('gateway panel uses the session, preserves report links, and never sends a 
   }
 
   const browser = await chromium.launch();
-  t.after(() => browser.close());
+  resources.browser = browser;
   const context = await browser.newContext();
   await context.addInitScript(() => sessionStorage.setItem('bug-kit-panel-token','stale-bearer-fixture'));
   await context.addCookies([{name:'fixture_session',value:'valid',domain:'127.0.0.1',path:'/team/',httpOnly:true}]);
@@ -171,12 +178,13 @@ test('gateway panel uses the session, preserves report links, and never sends a 
 });
 
 test('standard panel still signs in with PIN and sends its own bearer', async t => {
-  const origin = await fixture(t, {});
+  const resources = {};
+  const origin = await fixture(t, {}, resources);
   const registered = await fetch(origin + '/api/panel/register', {method:'POST', headers:{'Content-Type':'application/json'},
     body:JSON.stringify({projectId:'site', name:'Legacy reviewer', pin:'1234'})});
   assert.equal(registered.status, 201);
   const browser = await chromium.launch();
-  t.after(() => browser.close());
+  resources.browser = browser;
   const page = await browser.newPage();
   await page.goto(origin);
   await page.getByLabel('Имя', {exact:true}).fill('Legacy reviewer');
