@@ -45,6 +45,15 @@ test('compact launcher avoids controls after CSS load, mutations, resize and scr
   await page.locator('#save').evaluate(el=>el.style.width='200px');
   await check();
   await page.locator('#save').evaluate(el=>el.remove());
+  await page.evaluate(() => {
+    const status=document.createElement('p');
+    status.id='status'; status.textContent='Обновлено 9 ноября в 08:38';
+    status.style.cssText='position:fixed;right:20px;top:16px;margin:0';
+    document.body.append(status);
+  });
+  const textBox=await page.locator('#status').boundingBox(), withText=await settled();
+  assert.ok(withText.x + withText.width <= textBox.x - 10, 'launcher avoids status text');
+  await page.locator('#status').evaluate(el=>el.remove());
   const returned=await settled();
   assert.equal(returned.x,315); assert.equal(returned.y,16);
   await launcher.click();

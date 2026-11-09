@@ -188,6 +188,19 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
       .filter((element) => !element.closest('[data-bug-report-kit]'))
       .map((element) => element.getBoundingClientRect())
       .filter((rect) => rect.width && rect.height && rect.bottom > top && rect.top < bottom);
+    // Protect visible text as well as controls, without treating whole layout boxes as obstacles.
+    const textNodes = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    while (textNodes.nextNode()) {
+      const node = textNodes.currentNode, parent = node.parentElement;
+      if (!node.textContent.trim() || !parent || parent.closest('script,style,noscript,[data-bug-report-kit],[data-bug-report-ui]')) continue;
+      const style = getComputedStyle(parent);
+      if (style.visibility !== 'visible' || style.display === 'none') continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) {
+        if (rect.width && rect.height && rect.bottom > top && rect.top < bottom && rect.right > left && rect.left < right) targets.push(rect);
+      }
+    }
     const overlaps = (box, rect) => box.left < rect.right + gap
       && box.right > rect.left - gap
       && box.top < rect.bottom + gap
