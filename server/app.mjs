@@ -115,6 +115,7 @@ function rowToReport(row) {
     title: row.title || row.description.slice(0, 120), description: row.description,
     reporterName: row.reporter_name || 'Анонимный пользователь', reporterContact: row.reporter_contact || '',
     reporterId: row.reporter_id || '',
+    appUser: JSON.parse(row.app_user || '{}'), browserSessionId: row.browser_session_id || '', clientIp: row.client_ip || '', clientIpSource: row.client_ip_source || '',
     steps: row.steps || '', expected: row.expected || '', actual: row.actual || '',
     pageUrl: row.page_url, origin: row.origin, userAgent: row.user_agent || '',
     environment: row.environment, appVersion: row.app_version || '', viewport: JSON.parse(row.viewport),
@@ -228,7 +229,8 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
   const additions = {
     app_version: "TEXT NOT NULL DEFAULT ''", title: "TEXT NOT NULL DEFAULT ''",
     reporter_name: "TEXT NOT NULL DEFAULT 'Анонимный пользователь'", reporter_contact: "TEXT NOT NULL DEFAULT ''",
-    reporter_id: "TEXT NOT NULL DEFAULT ''",
+    reporter_id: "TEXT NOT NULL DEFAULT ''", app_user: "TEXT NOT NULL DEFAULT '{}'",
+    browser_session_id: "TEXT NOT NULL DEFAULT ''", client_ip: "TEXT NOT NULL DEFAULT ''", client_ip_source: "TEXT NOT NULL DEFAULT ''",
     steps: "TEXT NOT NULL DEFAULT ''", expected: "TEXT NOT NULL DEFAULT ''",
     actual: "TEXT NOT NULL DEFAULT ''", user_agent: "TEXT NOT NULL DEFAULT ''",
     priority: "TEXT NOT NULL DEFAULT 'normal'", assignee: "TEXT NOT NULL DEFAULT ''",
@@ -275,8 +277,8 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
     (id,project_id,created_at,updated_at,revision,status,title,description,steps,expected,actual,
      page_url,origin,user_agent,environment,app_version,viewport,selection,screenshot,screenshot_mime,
      attachment,attachment_name,attachment_mime,
-     fingerprint,diagnostics,history,reporter_name,reporter_contact,reporter_id)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+     fingerprint,diagnostics,history,reporter_name,reporter_contact,reporter_id,app_user,browser_session_id,client_ip,client_ip_source)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
   const update = db.prepare(`UPDATE reports SET updated_at=?,revision=?,status=?,priority=?,assignee=?,
     agent_state=?,pending_question=?,root_cause=?,resolution=?,fix_evidence=?,verification_note=?,
     accepted_at=?,duplicate_of=?,history=? WHERE id=? AND revision=?`);
@@ -456,6 +458,8 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
         const reporterName = account?.name || safeText(body.reporterName, 120) || 'Анонимный пользователь';
         const reporterContact = account ? '' : safeText(body.reporterContact, 240);
         const reporterId = account?.id || safeText(body.reporterId, 120);
+        const suppliedUser = body.appUser && typeof body.appUser === 'object' ? body.appUser : {};
+        const appUser = Object.fromEntries([['id',120],['name',120],['contact',240],['role',120]].map(([key,limit]) => [key,safeText(suppliedUser[key],limit)]).filter(([,value]) => value));
         let page;
         try { page = new URL(body.pageUrl); }
         catch { return json(res, 400, {error: 'Некорректный адрес страницы'}); }
@@ -478,7 +482,7 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
           JSON.stringify(viewport), JSON.stringify(selection), screenshot?.data || null,
           screenshot?.mime || null, attachment?.data || null, attachment?.name || '', attachment?.mime || '',
           fingerprintFor(project.id, page, title),
-          JSON.stringify(diagnostics), JSON.stringify(history), reporterName, reporterContact, reporterId);
+          JSON.stringify(diagnostics), JSON.stringify(history), reporterName, reporterContact, reporterId, JSON.stringify(appUser), safeText(body.browserSessionId, 120), safeText(clientIp, 100), config.trustProxy && isIP(req.headers['x-real-ip'] || '') ? 'trusted-proxy' : 'connection');
         audio.insert(id, recording, draft);
         if (draft) audio.cancelDraft(draft.id);
         db.exec('COMMIT');
@@ -524,7 +528,7 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
             title,description,steps,expected,actual,page_url,origin,user_agent,environment,app_version,
             viewport,selection,priority,assignee,agent_state,pending_question,fingerprint,duplicate_of,
             diagnostics,root_cause,resolution,fix_evidence,verification_note,accepted_at,history,
-            reporter_name,reporter_contact,reporter_id,attachment_name,attachment_mime,
+            reporter_name,reporter_contact,reporter_id,app_user,browser_session_id,client_ip,client_ip_source,attachment_name,attachment_mime,
             CASE WHEN screenshot IS NULL THEN 0 ELSE 1 END AS screenshot_available,
             CASE WHEN attachment IS NULL THEN 0 ELSE 1 END AS attachment_available,
             COALESCE(length(attachment),0) AS attachment_size
@@ -600,6 +604,9 @@ export function createApp(config, {rootDir = process.cwd(), database = config.da
           <details><summary>Технические сведения</summary><p class="meta">ID: ${escapeHtml(row.id)} · Проект: ${escapeHtml(row.project_id)} · Версия: ${escapeHtml(row.app_version || 'не указана')}</p>
             ${report.reporterId ? `<p class="meta">ID автора: ${escapeHtml(report.reporterId)}</p>` : ''}
             ${report.reporterContact ? `<p class="meta">Контакт автора: ${escapeHtml(report.reporterContact)}</p>` : ''}
+            ${htmlText('Пользователь приложения (передано приложением, не проверено)', [report.appUser.name, report.appUser.id, report.appUser.contact].filter(Boolean).join(' · '))}
+            ${htmlText('Роль пользователя приложения (не проверено)', report.appUser.role || '—')}
+            ${htmlText('Сессия браузера', report.browserSessionId)}${htmlText('Сетевой адрес и источник', [report.clientIp, report.clientIpSource].filter(Boolean).join(' · '))}${htmlText('Браузер', report.userAgent)}${htmlText('Окно', JSON.stringify(report.viewport))}
             ${htmlText('Как повторить', report.steps)}${htmlText('Фактически', report.actual)}${htmlText('Причина', row.root_cause)}
             ${htmlText('Диагностика', report.diagnostics.length ? JSON.stringify(report.diagnostics, null, 2) : '')}
             ${htmlText('Код и проверки', Object.keys(report.fixEvidence).length ? JSON.stringify(report.fixEvidence, null, 2) : '')}

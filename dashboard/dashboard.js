@@ -261,6 +261,13 @@ async function showReport(id) {
   textBlock(technical, 'Исполнитель', selected.assignee);
   textBlock(technical, 'Контакт автора', selected.reporterContact);
   textBlock(technical, 'ID автора', selected.reporterId);
+  const appUser = selected.appUser || {};
+  textBlock(technical, 'Пользователь приложения (не проверено)', [appUser.name, appUser.id, appUser.contact].filter(Boolean).join(' · '));
+  textBlock(technical, 'Роль пользователя приложения (не проверено)', appUser.role || '—');
+  textBlock(technical, 'Сессия браузера', selected.browserSessionId);
+  textBlock(technical, 'Сетевой адрес и источник', [selected.clientIp, selected.clientIpSource].filter(Boolean).join(' · '));
+  textBlock(technical, 'Браузер и устройство', selected.userAgent);
+  textBlock(technical, 'Окно и масштаб', selected.viewport && Object.keys(selected.viewport).length ? JSON.stringify(selected.viewport) : '');
   textBlock(technical, 'Адрес страницы', selected.pageUrl);
   textBlock(technical, 'Как повторить', selected.steps);
   textBlock(technical, 'Ожидалось', selected.expected);

@@ -265,9 +265,17 @@ test('widget browser regressions and reviewer handoff', async (t) => {
     };
     try {
       await page.goto(`${siteOrigin}/auth`);
+      await page.evaluate(() => { window.__testReporter = {id:'app-42', name:'User', role:'student', token:'SECRET'}; });
       const first = await reportAfterAuth(page, 'Reporter auth registration', 'Создать имя');
       assert.match(first.reporterId, /^[0-9a-f-]{36}$/i);
       assert.equal(first.reporterName, 'Тестировщик один');
+      assert.deepEqual(first.appUser, {id:'app-42', name:'User', role:'student'});
+      assert.match(first.browserSessionId, /^[0-9a-f-]{36}$/i);
+      assert.equal(first.clientIpSource, 'connection');
+      assert.ok(first.clientIp);
+      assert.ok(first.userAgent);
+      assert.equal(first.viewport.width, 800);
+      assert.equal(requests[0].body.appUser.token, undefined);
       assert.equal(first.reporterContact || '', '');
       assert.equal(first.title, 'Reporter auth registration');
       assert.equal('reporterId' in requests[0].body, false);
@@ -275,6 +283,18 @@ test('widget browser regressions and reviewer handoff', async (t) => {
       assert.equal('reporterContact' in requests[0].body, false);
       assert.equal('steps' in requests[0].body, false, 'Reproduction steps stay in the main description field');
       assert.ok(requests[0].headers['x-reporter-token']);
+      const panel = await browser.newPage();
+      try {
+        await panel.addInitScript(() => sessionStorage.setItem('bug-kit-panel-token', 'private-reviewer'));
+        await panel.goto(kitBase);
+        await panel.locator('.item').filter({hasText:'Reporter auth registration'}).click();
+        await panel.locator('.technical').evaluate(node => { node.open = true; });
+        assert.match(await panel.locator('.technical').innerText(), /app-42/);
+        assert.match(await panel.locator('.technical').innerText(), /student/);
+        assert.match(await panel.locator('.technical').innerText(), /Роль пользователя приложения/);
+        assert.match(await panel.locator('.technical').innerText(), /Сессия браузера/);
+        assert.match(await panel.locator('.technical').innerText(), /Сетевой адрес/);
+      } finally { await panel.close(); }
 
       await page.reload();
       await page.getByRole('button', {name: 'Report issue'}).click();
@@ -618,6 +638,8 @@ test('widget browser regressions and reviewer handoff', async (t) => {
         assert.equal((await htmlDownload).suggestedFilename(), 'wrong-export.docx');
       } finally { await htmlPage.close(); }
       await page.locator('.item').filter({hasText: 'Browser capture'}).click();
+      await page.locator('.technical').evaluate(node => { node.open = true; });
+      assert.match(await page.locator('.technical').innerText(), /Роль пользователя приложения \(не проверено\)\s*—/);
       assert.equal(await page.locator('#detail').getByText('Описание').isVisible(), true);
       assert.equal(await page.locator('#detail').getByText('Код и проверки').count(), 0);
       assert.equal(await page.locator('#header-session').isVisible(), true);
