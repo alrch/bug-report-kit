@@ -7,7 +7,6 @@ import {createApp} from '../server/app.mjs';
 
 test('reporter PIN account owns report identity and survives server restart', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'bug-kit-auth-'));
-  t.after(() => rmSync(directory, {recursive: true, force: true}));
   const origin = 'http://localhost:7338';
   const config = {
     reporterAuthSecret: 'test-secret-with-more-than-thirty-two-characters',
@@ -27,7 +26,10 @@ test('reporter PIN account owns report identity and survives server restart', as
     await new Promise((resolve) => app.server.close(resolve));
     app.db.close();
   };
-  t.after(async () => {if (app.server.listening) await stop();});
+  t.after(async () => {
+    if (app?.server.listening) await stop();
+    rmSync(directory, {recursive: true, force: true});
+  });
   let base = await start();
   const post = (path, key, body, token) => fetch(`${base}${path}`, {
     method: 'POST', headers: {'Content-Type': 'application/json', Origin: origin,
