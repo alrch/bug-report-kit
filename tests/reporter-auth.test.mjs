@@ -72,7 +72,7 @@ test('reporter PIN account owns report identity and survives server restart', as
   assert.match(wrongPinBody.error, /проверьте (?:PIN|четыре цифры)/i);
   assert.equal((await post('/api/reporter/login', 'site-key', {name: 'мАРИЯ', pin: '1234'})).status, 200);
   const spoofed = {description: 'Ошибка в форме', title: 'Ошибка', pageUrl: `${origin}/page`,
-    reporterName: 'Чужое имя', reporterId: 'forged', reporterContact: 'forged@example.test'};
+    reporterName: 'Чужое имя', reporterId: 'forged', reporterContact: 'forged@example.test', appUser: {id:'lms-42',name:'Ученик',role:'student',contact:'student@example.test',token:'SECRET'}};
   assert.equal((await post('/api/reports', 'site-key', spoofed)).status, 401);
   assert.equal((await post('/api/reports', 'other-key', spoofed, token)).status, 401);
   const created = await post('/api/reports', 'site-key', spoofed, token);
@@ -89,9 +89,15 @@ test('reporter PIN account owns report identity and survives server restart', as
   assert.equal(detail.reporterName, 'Мария');
   assert.equal(detail.reporterId, reporter.id);
   assert.equal(detail.reporterContact, '');
+  assert.deepEqual(detail.appUser, {id:'lms-42', name:'Ученик', role:'student', contact:'student@example.test'});
+  const listed = await (await fetch(`${base}/api/reports?project=site`, {headers: panelHeaders})).json();
+  assert.deepEqual(listed.find(item => item.id === id).appUser, detail.appUser);
   const html = await (await fetch(`${base}/api/reports/${id}/html`,
     {headers: {Authorization: 'Bearer team-token'}})).text();
   assert.match(html, /Мария/);
+  assert.match(html, /lms-42/);
+  assert.match(html, /student/);
+  assert.doesNotMatch(html, /SECRET/);
   assert.match(html, new RegExp(reporter.id));
   assert.doesNotMatch(html, /Чужое имя|forged@example\.test/);
   await stop();

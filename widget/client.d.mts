@@ -1,4 +1,4 @@
-export interface KitReporter { id?: string; name?: string; contact?: string }
+export interface KitReporter { id?: string; name?: string; contact?: string; role?: string }
 export interface KitClientOptions {
   serverUrl?: string;
   projectKey: string;

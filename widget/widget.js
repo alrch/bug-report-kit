@@ -27,6 +27,17 @@ function anonymousReporterId(projectKey) {
   return id;
 }
 
+function browserSessionId(projectKey) {
+  const key = `bug-report-kit:session:${projectKey}`;
+  try {
+    const existing = sessionStorage.getItem(key);
+    if (/^[0-9a-f-]{36}$/i.test(existing || '')) return existing;
+    const id = crypto.randomUUID();
+    sessionStorage.setItem(key, id);
+    return id;
+  } catch { return ''; }
+}
+
 async function compress(canvas) {
   let current = document.createElement('canvas');
   current.width = canvas.width; current.height = canvas.height;
@@ -411,7 +422,7 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
     reporter.maxLength = 120;
     reporter.autocomplete = 'name';
     let currentReporter = {};
-    try { currentReporter = !reporterAuth && typeof getReporter === 'function' ? getReporter() || {} : {}; }
+    try { currentReporter = typeof getReporter === 'function' ? getReporter() || {} : {}; }
     catch { /* Identity is optional; the reporter can enter it manually. */ }
     const accountReporterId = typeof currentReporter.id === 'string' ? currentReporter.id.trim().slice(0, 120) : '';
     if (!reporterAuth && !accountReporterId && !guestReporterId) guestReporterId = anonymousReporterId(projectKey);
@@ -664,6 +675,8 @@ function init({serverUrl, projectKey, label = 'Сообщить о баге', la
             actual: description.value.trim(),
             ...(draft ? {transcriptionDraft:{id:draft.id,token:draft.draftToken}} : {}),
             ...(reporterAuth ? {} : {reporterName: reporter.value.trim(), reporterContact: contact.value.trim(), reporterId}),
+            browserSessionId: browserSessionId(projectKey),
+            appUser: (() => { try { const u = typeof getReporter === 'function' ? getReporter() : null; return u && typeof u === 'object' ? {id:u.id, name:u.name, contact:u.contact, role:u.role} : {}; } catch { return {}; } })(),
             pageUrl: safePageUrl(),
             viewport: {width: innerWidth, height: innerHeight, pixelRatio: devicePixelRatio},
             selection,
