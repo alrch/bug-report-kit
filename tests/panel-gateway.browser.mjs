@@ -198,3 +198,61 @@ test('standard panel still signs in with PIN and sends its own bearer', async t 
   await page.locator('#login').waitFor();
   assert.equal(await page.evaluate(() => sessionStorage.getItem('bug-kit-panel-token')), null);
 });
+
+test('PIN reviewer can cancel new and triaged reports with a reason', async t => {
+  const resources = {};
+  const reportOrigin = 'http://localhost:7338';
+  const origin = await fixture(t, {
+    projects: [{id:'site', name:'Fixture site', widgetKey:'public-key',
+      allowedOrigins:[reportOrigin], reporterAuth:true, panelAccess:true}],
+  }, resources);
+  const registration = await fetch(origin + '/api/panel/register', {method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({projectId:'site', name:'Fixture reviewer', pin:'1234'})});
+  assert.equal(registration.status, 201);
+  const {token} = await registration.json();
+  const developerHeaders = {Authorization:`Bearer ${agentToken}`, 'Content-Type':'application/json'};
+  const reports = new Map();
+  for (const description of ['New cancellation fixture', 'Triaged cancellation fixture']) {
+    const response = await fetch(origin + '/api/reports', {method:'POST', headers:{
+      Origin:reportOrigin, 'X-Project-Key':'public-key', 'X-Reporter-Token':token, 'Content-Type':'application/json',
+    }, body:JSON.stringify({description, pageUrl:reportOrigin+'/page'})});
+    assert.equal(response.status, 201);
+    reports.set(description, (await response.json()).id);
+  }
+  const triagedId = reports.get('Triaged cancellation fixture');
+  for (const [revision, action, note] of [[0, 'claim', ''], [1, 'ask', 'Need reproduction details']]) {
+    const response = await fetch(origin + '/api/reports/' + triagedId, {
+      method:'PATCH', headers:developerHeaders, body:JSON.stringify({revision, action, note}),
+    });
+    assert.equal(response.status, 200);
+  }
+  const browser = await chromium.launch();
+  resources.browser = browser;
+  const developerPage = await browser.newPage();
+  await developerPage.addInitScript(value => sessionStorage.setItem('bug-kit-panel-token', value), agentToken);
+  await developerPage.goto(origin + '/reports/' + triagedId);
+  await developerPage.getByRole('heading', {name:'Triaged cancellation fixture'}).waitFor();
+  assert.equal(await developerPage.getByRole('button', {name:'Отменить карточку'}).count(), 0);
+  await developerPage.close();
+  const page = await browser.newPage();
+  await page.goto(origin);
+  await page.getByLabel('Имя', {exact:true}).fill('Fixture reviewer');
+  await page.getByLabel('PIN', {exact:true}).fill('1234');
+  await page.getByRole('button', {name:'Войти',exact:true}).click();
+  for (const [title, id] of reports) {
+    await page.getByRole('button', {name:new RegExp(title)}).click();
+    await page.getByRole('heading', {name:title}).waitFor();
+    const cancel = page.getByRole('button', {name:'Отменить карточку'});
+    await cancel.click();
+    await page.getByText('Укажите причину отмены.', {exact:true}).waitFor();
+    const note = 'Закрыто без изменения продукта';
+    await page.getByLabel('Причина отмены').fill(note);
+    await cancel.click();
+    await page.locator('#detail').getByText('Отменён', {exact:true}).waitFor();
+    assert.equal(await cancel.count(), 0);
+    assert.equal(await page.getByRole('button', {name:'Отправить ответ'}).count(), 0);
+    const report = await (await fetch(origin + '/api/reports/' + id, {headers:developerHeaders})).json();
+    assert.equal(report.status, 'cancelled');
+    assert.equal(report.history.at(-1).note, note);
+  }
+});

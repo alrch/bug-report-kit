@@ -294,11 +294,19 @@ async function showReport(id) {
   if (selected.pendingQuestion) textBlock(detail, 'Вопрос команды', selected.pendingQuestion);
   const actions = document.createElement('div');
   actions.className = 'actions review-actions';
-  if (canReview() && selected.agentState === 'needs_decision') {
+  if (canReview() && selected.status !== 'cancelled' && selected.agentState === 'needs_decision') {
     const answer = field(actions, 'Ответ на вопрос', '', true);
     actionButton(actions, 'Отправить ответ', () => {
       if (!answer.value.trim()) return message('Введите ответ на вопрос.', true);
       void change(id, 'answer', {note: answer.value});
+    });
+  }
+  if (canReview() && ['new', 'triaged'].includes(selected.status)) {
+    const reason = field(actions, 'Причина отмены', '', true);
+    actionButton(actions, 'Отменить карточку', () => {
+      const note = reason.value.trim();
+      if (!note) return message('Укажите причину отмены.', true);
+      void change(id, 'cancel', {note});
     });
   }
   if (canReview() && selected.status === 'ready_for_check') {
